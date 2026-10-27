@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
@@ -8,6 +8,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
+import { photoDestination, saveToPhotos } from './src/photos';
 
 type ButtonProps = { title: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean };
 function Button({ title, onPress, disabled, secondary, selected }: ButtonProps) {
@@ -24,6 +25,7 @@ function Editor() {
   const [history, setHistory] = useState<EditOptions[]>([]), [projects, setProjects] = useState<Snapshot['projects']>([]);
   const [pendingJob, setPendingJob] = useState<string | null>(null), [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(''), [message, setMessage] = useState('사진 한 장으로, 프레임 밖으로.'), [saveState, setSaveState] = useState('');
+  const [exportMessage, setExportMessage] = useState('');
   const [status, setStatus] = useState<{ modelConfigured: boolean; usage: Usage } | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
@@ -45,6 +47,7 @@ function Editor() {
     return () => clearTimeout(timer);
   }, [ready, view, history, projects, pendingJob]);
   const accept = (next: ProjectView) => {
+    setExportMessage('');
     setView(next); setDraft(next.options); setPicking(next.project.candidates.length > 1 && !next.project.selectedId); setPoint(null);
     setProjects(current => [{ id: next.project.id, createdAt: next.project.createdAt }, ...current.filter(item => item.id !== next.project.id)].slice(0, 20));
     setStatus(current => current ? { ...current, usage: next.usage } : current);
@@ -86,10 +89,23 @@ function Editor() {
   const useFixture = () => { void task('연습용 그림을 여는 중', async () => { accept(await request<ProjectView>(connection, '/fixture', {})); setHistory([]); setMessage('직접 그린 테스트 그림이에요. 실제 SAM 결과가 아닙니다.'); }); };
   const check = () => { void task('PC 연결을 확인하는 중', async () => { const next = await request<{ modelConfigured: boolean; usage: Usage }>(connection, '/status'); setStatus(next); setMessage(next.modelConfigured ? 'Meta 키 설정을 확인했어요. 실제 호출 권한·잔액은 별도 확인이 필요해요.' : 'PC 연결 완료. Meta 키는 아직 설정되지 않았어요. 연습용 그림은 사용할 수 있어요.'); }); };
   const save = (share = false) => { if (!view) return; void task(share ? '공유 파일을 준비하는 중' : '사진을 저장하는 중', async () => {
+    setExportMessage(share ? '공유 파일을 준비하고 있어요.' : '휴대폰 사진 보관함에 저장하고 있어요.');
+    try {
     if (dirty) throw new Error('변경 적용을 먼저 눌러 주세요.');
     const uri = await exportPhoto(view);
-    if (share) { if (!(await Sharing.isAvailableAsync())) throw new Error('이 기기에서 공유창을 사용할 수 없어요.'); await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: '입체 사진 공유' }); setMessage('공유창을 닫았어요. 실제 게시 여부는 대상 앱에서 확인해 주세요.'); }
-    else { const permission = await MediaLibrary.requestPermissionsAsync(true); if (!permission.granted) throw new Error('사진 저장 권한을 허용한 뒤 다시 시도해 주세요.'); await MediaLibrary.saveToLibraryAsync(uri); setMessage('완성된 PNG를 앨범에 저장했어요.'); }
+    if (share) { if (!(await Sharing.isAvailableAsync())) throw new Error('이 기기에서 공유창을 사용할 수 없어요.'); await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: '입체 사진 공유' }); const text = '공유창을 닫았어요. 실제 게시 여부는 대상 앱에서 확인해 주세요.'; setMessage(text); setExportMessage(text); }
+    else {
+      await saveToPhotos(uri, MediaLibrary);
+      const text = `사진 보관함에 저장했어요. ${photoDestination(Platform.OS)}`;
+      setMessage(text); setExportMessage(text);
+      Alert.alert('사진 저장 완료', `${photoDestination(Platform.OS)}\n\n파일: ${uri.split('/').at(-1)}`);
+    }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '사진을 저장하지 못했어요.';
+      setExportMessage(`실패: ${reason}`);
+      Alert.alert(share ? '공유 실패' : '사진 저장 실패', reason);
+      throw error;
+    }
   }); };
   const sourceHeight = view ? canvasWidth * view.project.height / view.project.width : 0;
   const onCanvasLayout = (event: LayoutChangeEvent) => setCanvasWidth(event.nativeEvent.layout.width);
@@ -112,7 +128,7 @@ function Editor() {
       <View style={styles.panel}><Text style={styles.panelTitle}>01 · 튀어나올 대상</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title={picking ? '합성 보기' : '사진에서 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={{ flex: 1 }}><Button title="SAM으로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View></View>{picking && <Text style={styles.help}>{point ? '선택한 점으로 분리합니다.' : '원본 사진에서 인물·소품을 탭하세요.'}</Text>}<TextInput accessibilityLabel="분리할 대상 설명" style={styles.input} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Text style={styles.help}>분리를 누르면 사진을 Meta에 전송하며 SAM 호출 1회를 사용해요. 점 선택을 하지 않으면 설명에 맞는 후보를 찾습니다.</Text>{view.project.candidates.length > 1 && <Text style={styles.help}>여러 후보가 있어요. 하나를 선택하세요.</Text>}<View style={styles.wrap}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</View>{!modelsAllowed && <Text style={styles.help}>설정에서 연결 확인을 눌러 Meta 사용 준비 상태를 확인하세요.</Text>}</View>
       {draft && <View style={styles.panel}><View style={styles.sectionHeading}><Text style={styles.panelTitle}>02 · 입체감 조절</Text><Text style={styles.help}>추가 AI 호출 없음</Text></View><View style={styles.wrap}>{(['portrait', 'story', 'square'] as const).map((ratio, i) => <Button key={ratio} title={['4:5', '9:16', '1:1'][i]} secondary selected={draft.ratio === ratio} disabled={disabled} onPress={() => change('ratio', ratio)} />)}</View><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Stepper title="그림자" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} /><View style={styles.wrap}>{['#EEE8DF', '#DDE9E4', '#DFDDF1', '#F0DCD4', '#253043'].map(color => <Pressable key={color} accessibilityRole="button" accessibilityLabel={`배경 ${color}`} accessibilityState={{ selected: draft.background === color }} onPress={() => change('background', color)} disabled={disabled} style={[styles.swatch, { backgroundColor: color, borderColor: draft.background === color ? '#7260cb' : 'transparent' }]} />)}</View>{view.project.decoration && <><Text style={styles.help}>장식 위치와 앞뒤</Text><View style={styles.row}><Button title="인물 앞" secondary selected={draft.decorationDepth === 'front'} disabled={disabled} onPress={() => change('decorationDepth', 'front')} /><Button title="인물 뒤" secondary selected={draft.decorationDepth === 'back'} disabled={disabled} onPress={() => change('decorationDepth', 'back')} /></View><Stepper title="장식 좌우" value={draft.decorationX} step={0.05} min={0} max={1} disabled={disabled} onChange={value => change('decorationX', value)} /><Stepper title="장식 상하" value={draft.decorationY} step={0.05} min={0} max={1} disabled={disabled} onChange={value => change('decorationY', value)} /><Stepper title="장식 크기" value={draft.decorationScale} step={0.05} min={0.08} max={0.65} disabled={disabled} onChange={value => change('decorationScale', value)} /></>}<View style={styles.row}><View style={{ flex: 1 }}><Button title="변경 적용" disabled={disabled || !dirty} onPress={() => render(draft)} /></View><View style={{ flex: 1 }}><Button title="실행 취소" secondary disabled={disabled || history.length === 0} onPress={() => render(history[history.length - 1], true)} /></View></View>{dirty && <Text style={styles.help}>조절한 뒤 변경 적용을 눌러 미리보기를 갱신하세요.</Text>}</View>}
       <View style={styles.panel}><Text style={styles.panelTitle}>03 · 나만의 장식</Text><Text style={styles.help}>설명을 Meta에 보내 이미지를 1회 생성합니다. 배경 분리는 별도 SAM 호출 1회예요.</Text><TextInput accessibilityLabel="생성할 장식 설명" style={styles.input} value={decorationPrompt} onChangeText={setDecorationPrompt} editable={!disabled} placeholder="예: a purple crystal" maxLength={500} /><Button title="Muse Image로 장식 만들기" secondary disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration', { prompt: decorationPrompt }, 'Muse Image가 장식을 만드는 중')} />{view.project.decorationPending && <><Text style={styles.help}>생성 완료. SAM으로 배경을 분리하면 앞뒤 배치가 가능해요.</Text><Button title="생성한 장식 배경 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration/segment', {}, '장식 배경을 분리하는 중')} /></>}{view.project.decoration && <Button title="장식 숨기기" secondary disabled={disabled} onPress={() => { void task('장식을 숨기는 중', async () => { accept(await request<ProjectView>(connection, '/decoration/remove', { projectId: view.project.id })); setMessage('장식을 숨겼어요.'); }); }} />}</View>
-      <View style={styles.panel}><Text style={styles.panelTitle}>완성된 한 장</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title="앨범 저장" disabled={disabled || dirty} onPress={() => save()} /></View><View style={{ flex: 1 }}><Button title="공유" secondary disabled={disabled || dirty} onPress={() => save(true)} /></View></View><Text style={styles.help}>{view.width} × {view.height} PNG · {saveState}</Text></View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>완성된 한 장</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title="앨범 저장" disabled={disabled || dirty} onPress={() => save()} /></View><View style={{ flex: 1 }}><Button title="공유" secondary disabled={disabled || dirty} onPress={() => save(true)} /></View></View><Text style={styles.help}>{view.width} × {view.height} PNG · {saveState}</Text><Text accessibilityLiveRegion="polite" style={styles.help}>{exportMessage || "앨범 저장은 휴대폰 사진 보관함에, 공유는 선택한 앱으로 전달합니다."}</Text></View>
     </>}
     {projects.length > 1 && <View style={styles.panel}><Text style={styles.panelTitle}>최근 작업</Text>{projects.slice(0, 5).map((project, i) => <Button key={project.id} title={`${i + 1}. ${new Date(project.createdAt).toLocaleString()}${project.id === view?.project.id ? ' · 현재' : ''}`} secondary disabled={disabled || project.id === view?.project.id} onPress={() => { void task('작업을 불러오는 중', async () => { accept(await request<ProjectView>(connection, `/projects/${project.id}`)); setHistory([]); setMessage('이전 작업을 열었어요.'); }); }} />)}</View>}
     <Text style={styles.footer}>REEL TALK · META HACKATHON 2026{ '\n' }원본의 얼굴과 포즈를 유지하는 레이어 합성</Text>
