@@ -12,7 +12,19 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 process.chdir(root);
 if (existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
 const address = lanAddress(networkInterfaces(), process.env.POPOUT_LAN_ADDRESS);
-const port = Number(process.env.POPOUT_PORT || 4180), app = await createApp();
+const port = Number(process.env.POPOUT_PORT || 4180);
+// Re-running the documented command should not create a second server or alter job records.
+let running;
+try {
+  const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
+  if (response.ok) running = await response.json();
+} catch {}
+if (running?.service === 'reel-talk-popout') {
+  await saveQR(`exp://${address}:8082`, path.join(root, '.local', 'expo-qr.png'));
+  console.log(`출품용 서버가 이미 실행 중입니다.\nExpo Go: exp://${address}:8082\n새로고침: npm run reload\nQR: .local/expo-qr.png`);
+  process.exit(0);
+}
+const app = await createApp();
 await new Promise((resolve, reject) => { app.server.once('error', reject); app.server.listen(port, '0.0.0.0', resolve); });
 console.log(`\nReel Talk · Pop Out\nPC 서버: http://${address}:${port}\n연결 코드: ${app.token}\nMeta 키: ${process.env.MODEL_API_KEY ? '설정됨 (실호출 미검증)' : '미설정 · 연습용 그림 사용 가능'}\n`);
 await saveQR(`exp://${address}:8082`, path.join(root, '.local', 'expo-qr.png'));

@@ -6,6 +6,7 @@
   "description": "Standalone pop-out photo editor developed during the Meta hackathon",
   "scripts": {
     "start": "node scripts/start.mjs",
+    "reload": "node scripts/reload.mjs",
     "api": "node --env-file-if-exists=.env server/index.mjs",
     "setup:model": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-model.ps1",
     "test": "node --test tests/*.test.mjs",
