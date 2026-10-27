@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { frameMatrix } from '../src/frame.ts';
 import { insist } from './errors.mjs';
+import { orderedLayers } from '../src/layer-order.ts';
 import { photoLayout, stickerRect } from '../src/layout.ts';
 
 export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.55, x: 0, y: -0.15, shadow: 0.48, tilt: -8, depth: 0.75, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
@@ -21,6 +22,8 @@ export function settings(value = {}) {
     insist([t.x, t.y, t.scale].every(Number.isFinite) && t.x >= -0.3 && t.x <= 1.3 && t.y >= -0.3 && t.y <= 1.3 && t.scale >= 0.08 && t.scale <= 2.5, '스티커 위치·크기를 확인해 주세요.');
   }
   for (const name of Object.keys(DEFAULTS)) if (Object.hasOwn(value, name)) result[name] = value[name];
+  insist(value.layerOrder === undefined || (Array.isArray(value.layerOrder) && value.layerOrder.length <= 17 && value.layerOrder.every(id => typeof id === 'string')), '레이어 순서를 확인해 주세요.');
+  result.layerOrder = orderedLayers({ ...result, layerOrder: value.layerOrder });
   insist(['portrait', 'story', 'square'].includes(result.ratio), '지원하지 않는 비율이에요.');
   insist(/^#[0-9a-f]{6}$/i.test(result.background), '배경 색상을 확인해 주세요.');
   insist(['front', 'back'].includes(result.decorationDepth), '장식 순서를 확인해 주세요.');
@@ -63,7 +66,8 @@ export async function compose({ source, cutout, decoration, stickers = [], optio
   const photoLayer = await place(source, photo, width, height);
   const inside = await sharp(photoLayer).composite([{ input: screenMask, blend: 'dest-in' }]).png().toBuffer();
   const bezel = svg(width, height, `<rect x="${q.x - 14}" y="${q.y - 14}" width="${q.width + 28}" height="${q.height + 28}" rx="45" fill="none" stroke="#b9c7d5" stroke-opacity=".55" stroke-width="2"/><rect x="${q.x + q.width / 2 - 46}" y="${q.y + 9}" width="92" height="19" rx="10" fill="#101724"/><circle cx="${q.x + q.width / 2 + 29}" cy="${q.y + 18}" r="4" fill="#354861"/><rect x="${q.x + q.width + 16}" y="${q.y + 120}" width="5" height="58" rx="2" fill="#8b9bb0"/>`);
-  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : s.mode === 'plain' && !cutout && !s.hidePrimary ? [{ input: photoLayer }] : [];
+  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : [];
+  const primary = s.mode === 'plain' && !cutout && !s.hidePrimary ? [{ input: photoLayer }] : [];
   let adornment;
   if (decoration) {
     const m = await sharp(decoration).metadata(), dw = Math.round(width * s.decorationScale), dh = Math.round(dw * m.height / m.width);
@@ -83,22 +87,29 @@ export async function compose({ source, cutout, decoration, stickers = [], optio
       const shadow = await sharp(data, { raw: { width, height, channels: 4 } }).blur(10 + s.depth * 10).png().toBuffer();
       const shifted = await place(shadow, { x: Math.round(8 + s.depth * 24), y: Math.round(12 + s.depth * 28), width, height }, width, height);
       // A subject casts a shadow onto the phone, not across its own face.
-      layers.push({ input: shifted }, { input: foreground });
-    } else layers.push({ input: foreground });
+      primary.push({ input: shifted }, { input: foreground });
+    } else primary.push({ input: foreground });
   }
-  if (adornment && s.decorationDepth === 'front') layers.push({ input: adornment });
-  if (s.mode === 'frame') {
-    const plane = await canvas(width, height).composite(layers).png().toBuffer();
-    const m = frameMatrix(s), cx = width / 2, cy = height / 2;
-    const transform = `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${cx - m.a * cx - m.c * cy} ${cy - m.b * cx - m.d * cy})`;
-    layers.splice(0, layers.length, { input: await sharp(svg(width, height, `<image width="${width}" height="${height}" transform="${transform}" href="data:image/png;base64,${plane.toString('base64')}"/>`)).png().toBuffer() });
+  if (adornment && s.decorationDepth === 'front') primary.push({ input: adornment });
+  const projectPlane = async items => {
+    let bytes = await canvas(width, height).composite(items).png().toBuffer();
+    if (s.mode === 'frame') {
+      const m = frameMatrix(s), cx = width / 2, cy = height / 2;
+      const transform = `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${cx - m.a * cx - m.c * cy} ${cy - m.b * cx - m.d * cy})`;
+      bytes = await sharp(svg(width, height, `<image width="${width}" height="${height}" transform="${transform}" href="data:image/png;base64,${bytes.toString('base64')}"/>`)).png().toBuffer();
+    }
+    return bytes;
+  };
+  const [background, primaryBytes] = await Promise.all([projectPlane(layers), projectPlane(primary)]);
+  const baseBytes = await canvas(width, height, s.mode === 'sticker' ? '#00000000' : s.background).composite([{ input: background }]).png().toBuffer();
+  const ordered = [{ input: baseBytes }];
+  for (const id of s.layerOrder) {
+    if (id === 'primary') { ordered.push({ input: primaryBytes }); continue; }
+    const sticker = stickers.find(item => item.id === id), transform = s.stickerTransforms.find(item => item.id === id);
+    if (sticker && transform) ordered.push({ input: await place(sticker.bytes, stickerRect(sticker, transform, g), width, height) });
   }
-  for (const transform of s.stickerTransforms) {
-    const sticker = stickers.find(item => item.id === transform.id);
-    if (sticker) layers.push({ input: await place(sticker.bytes, stickerRect(sticker, transform, g), width, height) });
-  }
-  const bytes = await canvas(width, height, s.mode === 'sticker' ? '#00000000' : s.background).composite(layers).png().toBuffer();
-  return { bytes, width, height, options: s, geometry: g };
+  const bytes = await canvas(width, height).composite(ordered).png().toBuffer();
+  return { bytes, baseBytes, primaryBytes, width, height, options: s, geometry: g };
 }
 
 export async function cutoutFromRaster(source, raster, box, maskWidth, maskHeight) {

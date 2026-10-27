@@ -1,5 +1,13 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
+export async function alphaBounds(cutout) {
+  const { data, info } = await sharp(cutout).extractChannel('alpha').raw().toBuffer({ resolveWithObject: true });
+  let left = info.width, top = info.height, right = -1, bottom = -1;
+  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[y * info.width + x] > 0) {
+    left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+  }
+  return right < left ? { x: 0, y: 0, width: 0, height: 0 } : { x: left / info.width, y: top / info.height, width: (right - left + 1) / info.width, height: (bottom - top + 1) / info.height };
+}
 
 export async function trimSticker(source, cutout) {
   const { data, info } = await sharp(cutout).ensureAlpha().raw().toBuffer({ resolveWithObject: true });

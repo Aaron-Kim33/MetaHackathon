@@ -9,7 +9,7 @@ import { compose, normalisePhoto, settings, cutoutFromRaster } from './compositi
 import { Store, ModelJobs, validId } from './store.mjs';
 import { segment, generateDecoration } from './meta.mjs';
 import { fixture } from './fixture.mjs';
-import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker } from './mask.mjs';
+import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function localToken(directory) {
@@ -43,7 +43,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
   await jobs.init();
   let projectTail = Promise.resolve();
   function mutate(fn) { const next = projectTail.then(fn); projectTail = next.catch(() => {}); return next; }
-  async function view(id) {
+  async function view(id, previewOnly = false) {
     const p = await store.get(id);
     const source = await store.read(id, 'source.png');
     const cutout = p.selectedId ? await store.read(id, p.maskEdits?.[p.selectedId] || `subject-${p.selectedId}.png`) : null;
@@ -54,14 +54,16 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const pending = (p.imports || []).find(item => item.id === p.pendingImport);
     const pendingPhoto = pending ? { id: pending.id, width: pending.width, height: pending.height, source: encoded(await store.read(id, pending.file)) } : null;
     const result = await compose({ source: photoSource, cutout, decoration, stickers, options: p.options || undefined });
+    const preview = { image: encoded(result.bytes), baseImage: encoded(result.baseBytes), primaryImage: encoded(result.primaryBytes), width: result.width, height: result.height, options: result.options, baseOptions: result.options, imageOptions: result.options };
+    if (previewOnly) return preview;
     const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
-    return { project: p, stickers: stickers.map(({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label })), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
+    return { ...preview, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: stickers.map(({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label })), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
     try {
       const url = new URL(req.url, 'http://localhost');
-      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 3, capabilities: ['contour-cutout', 'transparent-sticker', 'mask-photo-sync', 'multi-sticker', 'frame-depth'] }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 4, capabilities: ['lightweight-options', 'contour-cutout', 'transparent-sticker', 'mask-photo-sync', 'multi-sticker', 'frame-depth'] }); return; }
       const supplied = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''));
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
@@ -186,8 +188,8 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         });
         send(200, await view(project.id)); return;
       }
-      if (url.pathname === '/render') {
-        const options = settings(data.options);
+      if (url.pathname === '/render' || url.pathname === '/options') {
+        let options = settings(data.options);
         await mutate(async () => {
           const latest = await store.get(project.id);
           if (!Object.hasOwn(data.options, 'stickerTransforms')) options.stickerTransforms = latest.options?.stickerTransforms || [];
@@ -195,9 +197,9 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           for (const sticker of latest.stickers || []) if (!options.stickerTransforms.some(item => item.id === sticker.id)) {
             options.stickerTransforms.push(latest.options?.stickerTransforms?.find(item => item.id === sticker.id) || { id: sticker.id, x: 0.5, y: 0.45, scale: 0.65 });
           }
-          latest.options = options; await store.save(latest);
+          options = settings(options); latest.options = options; await store.save(latest);
         });
-        send(200, await view(project.id)); return;
+        send(200, url.pathname === '/options' ? { options } : await view(project.id, !!data.previewOnly)); return;
       }
       if (url.pathname === '/select') {
         insist(project.candidates.some(c => c.id === data.candidateId), '피사체 후보를 다시 선택해 주세요.');

@@ -58,8 +58,16 @@ test('two imported cutouts accumulate, move independently, preserve order, and s
   const reopened = await new Store(root).get(projectId);
   assert.equal(reopened.stickers.length, 2);
   assert.deepEqual(reopened.options.stickerTransforms, moved.options.stickerTransforms);
-  const reordered = await post('/render', { projectId, options: { ...moved.options, stickerTransforms: [...moved.options.stickerTransforms].reverse() } });
+  const reordered = await post('/render', { projectId, options: { ...moved.options, stickerTransforms: [...moved.options.stickerTransforms].reverse(), layerOrder: ['primary', ...[...moved.options.stickerTransforms].reverse().map(item => item.id)] } });
   assert.equal(reordered.options.stickerTransforms.at(-1).id, red.id);
+  const metadata = await post('/options', { projectId, options: { ...reordered.options, stickerTransforms: [...reordered.options.stickerTransforms].reverse() } });
+  assert.deepEqual(metadata.options.stickerTransforms, [...reordered.options.stickerTransforms].reverse());
+  assert.equal('image' in metadata, false, 'layer changes must not produce image payloads');
+  assert.equal('source' in metadata, false);
+  const preview = await post('/render', { projectId, options: reordered.options, previewOnly: true });
+  assert.ok(preview.baseImage);
+  assert.equal('source' in preview, false, 'preview updates must not transfer all source images again');
+  assert.equal('stickers' in preview, false);
   const removed = await post('/stickers/remove', { projectId, stickerId: red.id, options: { ...reordered.options, stickerTransforms: reordered.options.stickerTransforms.map(item => item.id === blue.id ? { ...item, x: 0.85 } : item) } });
   assert.equal(removed.stickers.length, 1); assert.equal(removed.stickers[0].data, blue.data);
   assert.deepEqual(removed.options.stickerTransforms, [{ ...transforms[1], x: 0.85 }]);
