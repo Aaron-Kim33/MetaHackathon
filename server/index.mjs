@@ -9,7 +9,7 @@ import { compose, normalisePhoto, settings, cutoutFromRaster } from './compositi
 import { Store, ModelJobs, validId } from './store.mjs';
 import { segment, generateDecoration } from './meta.mjs';
 import { fixture } from './fixture.mjs';
-import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout } from './mask.mjs';
+import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function localToken(directory) {
@@ -30,6 +30,10 @@ async function body(req) {
   catch { throw new AppError(400, '요청 형식이 올바르지 않아요.'); }
 }
 const encoded = bytes => bytes.toString('base64');
+const stickerLabel = project => {
+  project.stickerSequence = Math.max(project.stickerSequence || 0, ...(project.stickers || []).map(item => Number(item.label?.match(/\d+$/)?.[0]) || 0)) + 1;
+  return `스티커 ${project.stickerSequence}`;
+};
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher } = {}) {
@@ -46,15 +50,18 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const photoSource = p.selectedId && p.maskEdits?.[p.selectedId]
       ? await photoWithMaskEdits(source, await store.read(id, `subject-${p.selectedId}.png`), cutout) : source;
     const decoration = p.decoration ? await store.read(id, 'decoration.png') : null;
-    const result = await compose({ source: photoSource, cutout, decoration, options: p.options || undefined });
+    const stickers = await Promise.all((p.stickers || []).map(async sticker => ({ ...sticker, bytes: await store.read(id, sticker.maskFile || sticker.file) })));
+    const pending = (p.imports || []).find(item => item.id === p.pendingImport);
+    const pendingPhoto = pending ? { id: pending.id, width: pending.width, height: pending.height, source: encoded(await store.read(id, pending.file)) } : null;
+    const result = await compose({ source: photoSource, cutout, decoration, stickers, options: p.options || undefined });
     const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
-    return { project: p, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
+    return { project: p, stickers: stickers.map(({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label })), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
     try {
       const url = new URL(req.url, 'http://localhost');
-      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 2, capabilities: ['contour-cutout', 'transparent-sticker', 'mask-photo-sync'] }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 3, capabilities: ['contour-cutout', 'transparent-sticker', 'mask-photo-sync', 'multi-sticker', 'frame-depth'] }); return; }
       const supplied = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''));
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
@@ -80,11 +87,57 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         await store.save(project); send(200, await view(project.id)); return;
       }
       const project = await store.get(data.projectId);
+      if (url.pathname === '/imports') {
+        insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');
+        const photo = await normalisePhoto(Buffer.from(data.image, 'base64'));
+        await mutate(async () => {
+          const latest = await store.get(project.id);
+          insist((latest.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
+          const id = randomUUID(), file = `import-${id}.png`;
+          await store.write(project.id, file, photo.bytes);
+          latest.imports ||= []; latest.imports.push({ id, file, width: photo.width, height: photo.height }); latest.pendingImport = id;
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
+      if (url.pathname === '/stickers/edit') {
+        const sticker = (project.stickers || []).find(item => item.id === data.stickerId);
+        insist(sticker, '스티커를 찾지 못했어요.');
+        const result = await view(project.id);
+        result.source = encoded(await store.read(project.id, sticker.sourceFile));
+        result.subject = encoded(await store.read(project.id, sticker.maskFile || sticker.file));
+        result.project = { ...result.project, width: sticker.width, height: sticker.height };
+        send(200, result); return;
+      }
+      if (url.pathname === '/stickers/remove') {
+        await mutate(async () => {
+          const latest = await store.get(project.id);
+          insist((latest.stickers || []).some(item => item.id === data.stickerId), '스티커를 찾지 못했어요.');
+          latest.stickers = latest.stickers.filter(item => item.id !== data.stickerId);
+          latest.options = settings(latest.options || undefined);
+          latest.options.stickerTransforms = latest.options.stickerTransforms.filter(item => item.id !== data.stickerId);
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
       if (url.pathname === '/cutout') {
-        const source = await store.read(project.id, 'source.png');
+        const asset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
+        insist(!data.assetId || asset, '가져온 사진을 찾지 못했어요.');
+        const source = await store.read(project.id, asset ? asset.file : 'source.png');
         const cutout = await contourCutout(source, data.points);
         await mutate(async () => {
           const latest = await store.get(project.id), id = randomUUID();
+          if (asset) {
+            insist((latest.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
+            const file = `sticker-${id}.png`, sourceFile = `sticker-source-${id}.png`, trimmed = await trimSticker(source, cutout);
+            await store.write(project.id, file, trimmed.bytes);
+            await store.write(project.id, sourceFile, trimmed.source);
+            latest.stickers ||= []; latest.stickers.push({ id, file, sourceFile, width: trimmed.width, height: trimmed.height, label: stickerLabel(latest) });
+            latest.options = settings(latest.options || undefined);
+            latest.options.stickerTransforms.push({ id, x: 0.5, y: 0.45, scale: 0.65 });
+            if (latest.pendingImport === asset.id) latest.pendingImport = null;
+            await store.save(latest); return;
+          }
           await store.write(project.id, `subject-${id}.png`, cutout);
           latest.candidates.push({ id, label: '직접 자른 스티커', provider: 'manual-contour' });
           latest.selectedId = id;
@@ -95,11 +148,23 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         send(200, await view(project.id)); return;
       }
       if (url.pathname === '/mask' || url.pathname === '/mask/reset') {
-        insist(project.selectedId, '보정할 피사체를 먼저 선택해 주세요.');
+        insist(project.selectedId || data.stickerId, '보정할 피사체를 먼저 선택해 주세요.');
         if (url.pathname === '/mask') validateStrokes(data.strokes);
         insist(Number.isSafeInteger(data.baseRevision) && data.baseRevision >= 0, '보정 버전을 확인해 주세요.');
         await mutate(async () => {
           const latest = await store.get(project.id);
+          if (data.stickerId) {
+            const sticker = (latest.stickers || []).find(item => item.id === data.stickerId);
+            insist(sticker && (latest.maskRevision || 0) === data.baseRevision, '스티커가 변경됐어요. 다시 열어 주세요.', 409);
+            if (url.pathname === '/mask/reset') delete sticker.maskFile;
+            else {
+              const source = await store.read(project.id, sticker.sourceFile), cutout = await store.read(project.id, sticker.maskFile || sticker.file);
+              const file = `mask-${randomUUID()}.png`;
+              await store.write(project.id, file, await refineMask(source, cutout, data.strokes)); sticker.maskFile = file;
+            }
+            latest.maskRevision = (latest.maskRevision || 0) + 1;
+            await store.save(latest); return;
+          }
           insist(latest.selectedId === data.candidateId && (latest.maskRevision || 0) === data.baseRevision, '피사체가 변경됐어요. 최신 누끼를 불러온 뒤 다시 보정해 주세요.', 409);
           latest.maskEdits ||= {};
           if (url.pathname === '/mask/reset') delete latest.maskEdits[latest.selectedId];
@@ -118,7 +183,15 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       }
       if (url.pathname === '/render') {
         const options = settings(data.options);
-        await mutate(async () => { const latest = await store.get(project.id); latest.options = options; await store.save(latest); });
+        await mutate(async () => {
+          const latest = await store.get(project.id);
+          if (!Object.hasOwn(data.options, 'stickerTransforms')) options.stickerTransforms = latest.options?.stickerTransforms || [];
+          insist(options.stickerTransforms.every(t => (latest.stickers || []).some(item => item.id === t.id)), '스티커 목록이 변경됐어요. 작업을 다시 열어 주세요.', 409);
+          for (const sticker of latest.stickers || []) if (!options.stickerTransforms.some(item => item.id === sticker.id)) {
+            options.stickerTransforms.push(latest.options?.stickerTransforms?.find(item => item.id === sticker.id) || { id: sticker.id, x: 0.5, y: 0.45, scale: 0.65 });
+          }
+          latest.options = options; await store.save(latest);
+        });
         send(200, await view(project.id)); return;
       }
       if (url.pathname === '/select') {
@@ -131,13 +204,16 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         send(200, await view(project.id)); return;
       }
       insist(['/segment', '/decoration', '/decoration/segment'].includes(url.pathname), '지원하지 않는 요청이에요.', 404);
+      const importedAsset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
+      insist(!data.assetId || (url.pathname === '/segment' && importedAsset), '가져온 사진을 찾지 못했어요.');
+      if (importedAsset) insist((project.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
       insist(key?.trim(), 'Meta Model API 키가 아직 없어요. PC에서 npm run setup:model을 실행해 주세요.', 503);
       insist(creditsConfirmed, 'Billing의 대회 크레딧 지급을 확인한 뒤 PC에서 모델 설정을 완료해 주세요.', 403);
       // Validate before reserving any potential paid call.
       if (url.pathname === '/decoration' || (!data.point && url.pathname === '/segment')) insist(typeof data.prompt === 'string' && data.prompt.trim() && data.prompt.length <= 500, '대상을 500자 이내로 설명해 주세요.');
       if (data.point) insist(Number.isFinite(data.point.x) && Number.isFinite(data.point.y) && data.point.x >= 0 && data.point.x <= 1 && data.point.y >= 0 && data.point.y <= 1, '사진 안에서 대상을 선택해 주세요.');
       const kind = url.pathname === '/decoration' ? 'image' : 'sam';
-      await jobs.run(data.jobId, kind, hash({ path: url.pathname, projectId: project.id, prompt: data.prompt, point: data.point }), async () => {
+      await jobs.run(data.jobId, kind, hash({ path: url.pathname, projectId: project.id, assetId: data.assetId, prompt: data.prompt, point: data.point }), async () => {
         if (url.pathname === '/decoration') {
           const result = await generateDecoration({ key, prompt: data.prompt }, fetcher);
           const generated = await normalisePhoto(result.bytes);
@@ -147,7 +223,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         }
         const isDecoration = url.pathname === '/decoration/segment';
         insist(!isDecoration || project.decorationPending, '장식을 먼저 생성해 주세요.');
-        const image = await store.read(project.id, isDecoration ? 'decoration-source.png' : 'source.png');
+        const image = await store.read(project.id, isDecoration ? 'decoration-source.png' : importedAsset ? importedAsset.file : 'source.png');
         const m = await sharp(image).metadata();
         const result = await segment({ key, image, width: m.width, height: m.height, point: isDecoration ? null : data.point, prompt: isDecoration ? project.decorationPending.prompt : data.prompt }, fetcher);
         insist(result.masks.length > 0, '대상을 찾지 못했어요. 사진에서 대상을 탭하거나 더 짧게 설명해 주세요.', 422);
@@ -162,6 +238,19 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         }
         await mutate(async () => {
           const latest = await store.get(project.id);
+          if (importedAsset) {
+            insist((latest.stickers || []).length + candidates.length <= 16, '스티커는 최대 16개까지 가능해요.');
+            latest.stickers ||= []; latest.options = settings(latest.options || undefined);
+            for (const candidate of candidates) {
+              const trimmed = await trimSticker(image, await store.read(project.id, `subject-${candidate.id}.png`));
+              const file = `sticker-${candidate.id}.png`, sourceFile = `sticker-source-${candidate.id}.png`;
+              await store.write(project.id, file, trimmed.bytes); await store.write(project.id, sourceFile, trimmed.source);
+              latest.stickers.push({ id: candidate.id, file, sourceFile, width: trimmed.width, height: trimmed.height, label: stickerLabel(latest), provider: candidate.provider, requestId: candidate.requestId });
+              latest.options.stickerTransforms.push({ id: candidate.id, x: 0.5, y: 0.45, scale: 0.65 });
+            }
+            if (latest.pendingImport === importedAsset.id) latest.pendingImport = null;
+            await store.save(latest); return;
+          }
           if (isDecoration) { latest.decoration = true; latest.decorationProvenance = { image: latest.decorationPending, segmentation: { model: result.model, requestId: result.requestId } }; latest.decorationPending = null; }
           else { latest.candidates = candidates; latest.selectedId = candidates.length === 1 ? candidates[0].id : null; }
           await store.save(latest);

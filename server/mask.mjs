@@ -1,6 +1,17 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
 
+export async function trimSticker(source, cutout) {
+  const { data, info } = await sharp(cutout).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let left = info.width, top = info.height, right = -1, bottom = -1;
+  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[(y * info.width + x) * 4 + 3] > 0) {
+    left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+  }
+  insist(right >= left && bottom >= top, '남길 피사체가 비어 있어요.');
+  const rect = { left, top, width: right - left + 1, height: bottom - top + 1 };
+  return { bytes: await sharp(cutout).extract(rect).png().toBuffer(), source: await sharp(source).extract(rect).png().toBuffer(), width: rect.width, height: rect.height };
+}
+
 export async function contourCutout(source, points) {
   insist(Array.isArray(points) && points.length >= 3 && points.length <= 2000, '테두리를 한 바퀴 그려 주세요.');
   for (const p of points) insist(p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1, '사진 안에서 테두리를 그려 주세요.');

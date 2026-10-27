@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
 
 export type EditOptions = {
+  tilt: number; depth: number;
+  stickerTransforms: import('./layout').StickerTransform[];
   mode: 'plain' | 'frame' | 'sticker';
   ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number; shadow: number; background: string;
   decorationDepth: 'front' | 'back'; decorationX: number; decorationY: number; decorationScale: number;
@@ -14,6 +16,8 @@ export type ProjectView = {
     maskRevision?: number;
   };
   image: string; source: string; photoSource?: string | null; subject?: string | null; decorationImage?: { data: string; width: number; height: number } | null; width: number; height: number; options: EditOptions; usage: Usage;
+  stickers?: { id: string; data: string; width: number; height: number; label: string }[];
+  pendingPhoto?: { id: string; source: string; width: number; height: number } | null;
 };
 export type Connection = { url: string; token: string };
 export const initialConnection: Connection = {

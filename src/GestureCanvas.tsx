@@ -2,9 +2,10 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
-import { gesturePhoto, photoLayout } from './layout';
+import { frameMatrix } from './frame';
+import { gesturePhoto, gestureSticker, stickerRect, photoLayout } from './layout';
 
-type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean };
+type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void };
 const uri = (data: string) => ({ uri: `data:image/png;base64,${data}` });
 function touchState(event: GestureResponderEvent) {
   const touches = event.nativeEvent.touches;
@@ -25,28 +26,43 @@ export function GestureCanvas(props: Props) {
   const current = useRef({ ...props, width, enabled, compare });
   current.current = { ...props, width, enabled, compare };
   const latest = useRef<EditOptions | null>(null);
-  const base = useRef<{ touch: ReturnType<typeof touchState>; options: EditOptions; anchorX: number; anchorY: number } | null>(null);
+  const base = useRef<{ touch: ReturnType<typeof touchState>; options: EditOptions; anchorX: number; anchorY: number; stickerId: string | null } | null>(null);
   const responder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => current.current.enabled && !current.current.disabled && !current.current.compare,
     onMoveShouldSetPanResponder: () => current.current.enabled && !current.current.disabled && !current.current.compare,
     onPanResponderGrant: event => {
       const touch = touchState(event);
+      const g = photoLayout(current.current.view.project, current.current.options), units = g.width / current.current.width;
+      const hit = [...(current.current.options.stickerTransforms || [])].reverse().find(transform => {
+        const sticker = current.current.view.stickers?.find(item => item.id === transform.id);
+        if (!sticker) return false;
+        const r = stickerRect(sticker, transform, g), x = touch.localX * units, y = touch.localY * units;
+        return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
+      });
+      current.current.onSelectSticker?.(hit?.id || null);
       latest.current = current.current.options;
-      base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY };
+      base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: hit?.id || null };
       current.current.onInteracting(true);
     },
     onPanResponderMove: event => {
       if (!base.current || !event.nativeEvent.touches.length) return;
       const touch = touchState(event), previous = base.current;
       if (touch.count !== previous.touch.count) {
-        base.current = { touch, options: latest.current || previous.options, anchorX: touch.localX, anchorY: touch.localY };
+        base.current = { touch, options: latest.current || previous.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: previous.stickerId };
         return;
       }
-      const options = gesturePhoto(previous.options, current.current.view.project, current.current.width, {
+      const gesture = {
         dx: touch.x - previous.touch.x, dy: touch.y - previous.touch.y,
         factor: touch.count > 1 && previous.touch.distance > 0 ? touch.distance / previous.touch.distance : 1,
         anchorX: previous.anchorX, anchorY: previous.anchorY,
-      });
+      };
+      let options: EditOptions;
+      if (previous.stickerId) {
+        const sticker = current.current.view.stickers?.find(item => item.id === previous.stickerId);
+        if (!sticker) return;
+        const g = photoLayout(current.current.view.project, previous.options);
+        options = { ...previous.options, stickerTransforms: (previous.options.stickerTransforms || []).map(t => t.id === sticker.id ? gestureSticker(t, sticker, g, current.current.width, gesture) : t) };
+      } else options = gesturePhoto(previous.options, current.current.view.project, current.current.width, gesture);
       latest.current = options; setLive(options);
     },
     onPanResponderRelease: () => {
@@ -59,6 +75,7 @@ export function GestureCanvas(props: Props) {
   }), []);
   const options = live || props.options, layout = photoLayout(props.view.project, options), scale = width / layout.width;
   const q = layout.screen, photo = layout.photo;
+  const fm = frameMatrix(options), matrix = [fm.a, fm.b, 0, 0, fm.c, fm.d, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const dirty = JSON.stringify(options) !== JSON.stringify(props.view.options);
   const localPreview = !!live || dirty;
   const decoration = props.view.decorationImage;
@@ -73,14 +90,24 @@ export function GestureCanvas(props: Props) {
     </View>}
     <View onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {options.mode === 'sticker' && !compare && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#F4F1F7' }]}>{Array.from({ length: 6 * Math.ceil(layout.height / layout.width * 6) }, (_, i) => <View key={i} style={{ width: width / 6, height: width / 6, backgroundColor: (Math.floor(i / 6) + i % 6) % 2 ? '#E0DCE7' : '#F4F1F7' }} />)}</View>}
-      {compare ? <Image pointerEvents="none" source={uri(props.view.source)} resizeMode="contain" style={StyleSheet.absoluteFill} /> : !localPreview ? <Image pointerEvents="none" source={uri(props.view.image)} style={StyleSheet.absoluteFill} resizeMode="contain" /> : options.mode === 'plain' ? <>{options.decorationDepth === 'back' && ornament}{props.view.subject ? subject : <Image pointerEvents="none" source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} />}{options.decorationDepth === 'front' && ornament}</> : options.mode === 'sticker' ? <>{options.decorationDepth === 'back' && ornament}{subject}{options.decorationDepth === 'front' && ornament}</> : <>
+      {compare ? <Image pointerEvents="none" source={uri(props.view.source)} resizeMode="contain" style={StyleSheet.absoluteFill} /> : !localPreview ? <Image pointerEvents="none" source={uri(props.view.image)} style={StyleSheet.absoluteFill} resizeMode="contain" /> : options.mode === 'plain' ? <>{options.decorationDepth === 'back' && ornament}{props.view.subject ? subject : <Image pointerEvents="none" source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} />}{options.decorationDepth === 'front' && ornament}</> : options.mode === 'sticker' ? <>{options.decorationDepth === 'back' && ornament}{subject}{options.decorationDepth === 'front' && ornament}</> : <View pointerEvents="none" style={[StyleSheet.absoluteFill, { transform: [{ matrix }] }]}>
+        <View style={{ position: 'absolute', left: (q.x - 15 + 28 * (options.depth || 0)) * scale, top: (q.y - 15 + 18 * (options.depth || 0)) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#253246' }} />
         <View pointerEvents="none" style={{ position: 'absolute', left: (q.x - 15) * scale, top: (q.y - 15) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#171e2b' }} />
         <View pointerEvents="none" style={{ position: 'absolute', left: q.x * scale, top: q.y * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><Image source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View>
         {options.decorationDepth === 'back' && ornament}
         <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width, height: (q.y + q.height - 40) * scale, overflow: 'hidden' }}>{subject}</View>
         {props.view.subject && <View pointerEvents="none" style={{ position: 'absolute', left: q.x * scale, top: (q.y + q.height - 40) * scale, width: q.width * scale, height: 40 * scale, overflow: 'hidden' }}><View style={{ position: 'absolute', top: -(q.height - 40) * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><Image source={uri(props.view.subject)} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View></View>}
         {options.decorationDepth === 'front' && ornament}
-      </>}
+      </View>}
+      {!compare && (options.stickerTransforms || []).map(transform => {
+        const sticker = props.view.stickers?.find(item => item.id === transform.id);
+        if (!sticker) return null;
+        const r = stickerRect(sticker, transform, layout), selected = props.activeStickerId === sticker.id;
+        return <View pointerEvents="none" key={sticker.id} style={{ position: 'absolute', left: r.x * scale, top: r.y * scale, width: r.width * scale, height: r.height * scale }}>
+          {localPreview && <Image source={uri(sticker.data)} style={StyleSheet.absoluteFill} />}
+          {selected && <View style={[StyleSheet.absoluteFill, { borderWidth: 1.5, borderColor: '#A58ADC', borderStyle: 'dashed' }]} />}
+        </View>;
+      })}
     </View>
     {!props.compact && enabled && <Text style={styles.hint}>한 손가락으로 이동 · 두 손가락으로 확대{live ? ' · 조절 중' : ''}</Text>}
   </View>;

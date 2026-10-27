@@ -48,7 +48,7 @@ test('complete mocked SAM and Muse decoration workflow shares the durable reques
   const image = await sharp({ create: { width: 320, height: 334, channels: 3, background: '#b39cde' } }).png().toBuffer();
   const wire = '<0f>0<|box;x1=211;y1=228;x2=270;y2=254;w=320;h=334|><|mask;x=0;y=0;data=27,60,~!!!!M!0c[0o91w?q1!pIH4pPRVp2B3\'7`e.ioeAf6-k/#Xd8%dX9x(|>';
   const calls = [];
-  const app = await createApp({ root, token: 'test-pairing', key: 'test-only', creditsConfirmed: true, caps: { sam: 2, image: 1 }, fetcher: async (url, init) => {
+  const app = await createApp({ root, token: 'test-pairing', key: 'test-only', creditsConfirmed: true, caps: { sam: 3, image: 1 }, fetcher: async (url, init) => {
     const request = JSON.parse(init.body); calls.push(request.model);
     return Response.json({ id: `mock_${calls.length}`, status: 'completed', output: request.model === 'sam-3.1' ? [{ type: 'message', content: [{ type: 'output_text', text: wire }] }] : [{ type: 'image_generation_call', result: image.toString('base64') }] });
   } });
@@ -71,8 +71,16 @@ test('complete mocked SAM and Muse decoration workflow shares the durable reques
   assert.equal(final.project.decorationPending, null);
   assert.equal(final.project.decorationProvenance.image.model, 'muse-image-1.0');
   assert.equal(final.usage.sam.reserved, 2); assert.equal(final.usage.image.reserved, 1);
+  const imported = await (await request('/imports', { projectId, image: image.toString('base64') })).json();
+  const importedJob = randomUUID();
+  const added = await (await request('/segment', { projectId, assetId: imported.pendingPhoto.id, jobId: importedJob, prompt: 'person' })).json();
+  assert.equal(added.stickers.length, 1);
+  assert.equal(added.subject, final.subject, 'AI separation of an added photo must preserve the original cutout');
+  assert.equal(added.usage.sam.reserved, 3);
+  const repeated = await (await request('/segment', { projectId, assetId: imported.pendingPhoto.id, jobId: importedJob, prompt: 'person' })).json();
+  assert.equal(repeated.stickers.length, 1, 'repeating a job must not duplicate the sticker');
   assert.equal((await request('/segment', { projectId, jobId: randomUUID(), prompt: 'person' })).status, 429);
-  assert.deepEqual(calls, ['sam-3.1', 'muse-image-1.0', 'sam-3.1']);
+  assert.deepEqual(calls, ['sam-3.1', 'muse-image-1.0', 'sam-3.1', 'sam-3.1']);
 });
 
 test('mask correction is durable, rejects stale edits and resets without any model calls', async t => {

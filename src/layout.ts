@@ -1,5 +1,20 @@
-export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
+import { unprojectFrame } from './frame.ts';
+export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; tilt?: number; depth?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
 export type Dimensions = { width: number; height: number };
+export type StickerTransform = { id: string; x: number; y: number; scale: number };
+export function stickerRect(source: Dimensions, transform: StickerTransform, canvas: Dimensions) {
+  const factor = Math.min(canvas.width / source.width, canvas.height / source.height) * transform.scale;
+  const width = Math.max(1, Math.round(source.width * factor)), height = Math.max(1, Math.round(source.height * factor));
+  return { x: Math.round(transform.x * canvas.width - width / 2), y: Math.round(transform.y * canvas.height - height / 2), width, height };
+}
+export function gestureSticker(initial: StickerTransform, source: Dimensions, canvas: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }): StickerTransform {
+  if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
+  const units = canvas.width / displayWidth, before = stickerRect(source, initial, canvas);
+  const scale = Math.min(2.5, Math.max(0.08, initial.scale * gesture.factor)), factor = scale / initial.scale;
+  const x = gesture.anchorX * units - (gesture.anchorX * units - (before.x + before.width / 2)) * factor + gesture.dx * units;
+  const y = gesture.anchorY * units - (gesture.anchorY * units - (before.y + before.height / 2)) * factor + gesture.dy * units;
+  return { ...initial, scale, x: Math.min(1.3, Math.max(-0.3, x / canvas.width)), y: Math.min(1.3, Math.max(-0.3, y / canvas.height)) };
+}
 export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   const width = 1080, height = options.ratio === 'story' ? 1920 : options.ratio === 'square' ? 1080 : 1350;
   const screenHeight = Math.round(height * 0.59), screenWidth = Math.min(588, Math.round(screenHeight * 0.56));
@@ -14,6 +29,10 @@ const bound = (n: number, min: number, max: number) => Math.max(min, Math.min(ma
 export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }): T {
   if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
   const before = photoLayout(source, initial);
+  const display = { width: displayWidth, height: displayWidth * before.height / before.width };
+  const anchor = unprojectFrame({ x: gesture.anchorX, y: gesture.anchorY }, display, initial);
+  const delta = unprojectFrame({ x: gesture.dx, y: gesture.dy }, display, initial, true);
+  gesture = { ...gesture, dx: delta.x, dy: delta.y, anchorX: anchor.x, anchorY: anchor.y };
   const zoom = bound(initial.zoom * gesture.factor, 0.8, 2.4);
   const factor = zoom / initial.zoom, units = before.width / displayWidth;
   const after = photoLayout(source, { ...initial, zoom });

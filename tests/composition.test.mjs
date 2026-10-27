@@ -49,7 +49,7 @@ test('sticker mode has transparent output and moving it leaves no original copy 
 test('source and subject remain aligned in all output ratios and negative crop positions', async () => {
   const sample = await fixture();
   for (const ratio of ['portrait', 'square', 'story']) {
-    const options = { ratio, shadow: 0, x: -0.15, y: -0.05, zoom: 1.4 };
+    const options = { ratio, shadow: 0, tilt: 0, depth: 0, x: -0.15, y: -0.05, zoom: 1.4 };
     const base = await compose({ source: sample.bytes, options });
     const result = await compose({ source: sample.bytes, cutout: sample.cutout, options });
     const g = geometry(sample, options), region = { left: g.screen.x + 60, top: g.screen.y + 60, width: g.screen.width - 120, height: g.screen.height - 120 };

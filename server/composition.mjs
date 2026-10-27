@@ -1,19 +1,28 @@
 import sharp from 'sharp';
+import { frameMatrix } from '../src/frame.ts';
 import { insist } from './errors.mjs';
-import { photoLayout } from '../src/layout.ts';
+import { photoLayout, stickerRect } from '../src/layout.ts';
 
-export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.25, x: 0, y: -0.10, shadow: 0.3, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
+export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.55, x: 0, y: -0.15, shadow: 0.48, tilt: -8, depth: 0.75, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
 
 export function settings(value = {}) {
   insist(value && typeof value === 'object' && !Array.isArray(value), '편집 설정이 올바르지 않아요.');
   const result = { mode: 'frame', ...DEFAULTS };
   if (Object.hasOwn(value, 'mode')) result.mode = value.mode;
   insist(['plain', 'frame', 'sticker'].includes(result.mode), '편집 모드를 확인해 주세요.');
+  result.stickerTransforms = value.stickerTransforms || [];
+  insist(Array.isArray(result.stickerTransforms) && result.stickerTransforms.length <= 16, '스티커는 최대 16개까지 가능해요.');
+  const ids = new Set();
+  for (const t of result.stickerTransforms) {
+    insist(t && typeof t.id === 'string' && /^[a-f0-9-]{36}$/i.test(t.id) && !ids.has(t.id), '스티커 ID를 확인해 주세요.');
+    ids.add(t.id);
+    insist([t.x, t.y, t.scale].every(Number.isFinite) && t.x >= -0.3 && t.x <= 1.3 && t.y >= -0.3 && t.y <= 1.3 && t.scale >= 0.08 && t.scale <= 2.5, '스티커 위치·크기를 확인해 주세요.');
+  }
   for (const name of Object.keys(DEFAULTS)) if (Object.hasOwn(value, name)) result[name] = value[name];
   insist(['portrait', 'story', 'square'].includes(result.ratio), '지원하지 않는 비율이에요.');
   insist(/^#[0-9a-f]{6}$/i.test(result.background), '배경 색상을 확인해 주세요.');
   insist(['front', 'back'].includes(result.decorationDepth), '장식 순서를 확인해 주세요.');
-  for (const [name, min, max] of [['zoom', 0.8, 2.4], ['x', -0.8, 0.8], ['y', -0.8, 0.8], ['shadow', 0, 0.8], ['decorationX', 0, 1], ['decorationY', 0, 1], ['decorationScale', 0.08, 0.65]]) {
+  for (const [name, min, max] of [['zoom', 0.8, 2.4], ['x', -0.8, 0.8], ['y', -0.8, 0.8], ['shadow', 0, 0.8], ['tilt', -18, 18], ['depth', 0, 1], ['decorationX', 0, 1], ['decorationY', 0, 1], ['decorationScale', 0.08, 0.65]]) {
     insist(Number.isFinite(result[name]) && result[name] >= min && result[name] <= max, `${name} 값이 허용 범위를 벗어났어요.`);
   }
   return result;
@@ -42,14 +51,16 @@ async function place(bytes, rect, width, height) {
   return canvas(width, height).composite([{ input: image, left, top }]).png().toBuffer();
 }
 
-export async function compose({ source, cutout, decoration, options }) {
+export async function compose({ source, cutout, decoration, stickers = [], options }) {
   const s = settings(options), dimensions = await sharp(source).metadata();
   const g = geometry(dimensions, s), { width, height, screen: q, photo } = g;
   const screenMask = svg(width, height, `<rect x="${q.x}" y="${q.y}" width="${q.width}" height="${q.height}" rx="30" fill="white"/>`);
-  const phone = svg(width, height, `<defs><filter id="s" x="-30%" y="-20%" width="160%" height="150%"><feGaussianBlur stdDeviation="19"/></filter></defs><rect x="${q.x - 12}" y="${q.y + 6}" width="${q.width + 24}" height="${q.height + 36}" rx="48" fill="#0d1725" opacity=".18" filter="url(#s)"/><rect x="${q.x - 15}" y="${q.y - 15}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="#171e2b"/><rect x="${q.x - 8}" y="${q.y - 8}" width="${q.width + 16}" height="${q.height + 16}" rx="39" fill="none" stroke="#58606e" stroke-width="2"/>`);
+  const extrusion = Math.round(28 * s.depth);
+  const phone = svg(width, height, `<defs><linearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#75849a"/><stop offset=".4" stop-color="#253246"/><stop offset="1" stop-color="#101827"/></linearGradient><filter id="s" x="-30%" y="-20%" width="160%" height="150%"><feGaussianBlur stdDeviation="19"/></filter></defs><rect x="${q.x - 12}" y="${q.y + 6}" width="${q.width + 24}" height="${q.height + 36}" rx="48" fill="#0d1725" opacity=".18" filter="url(#s)"/><rect x="${q.x - 15 + extrusion}" y="${q.y - 15 + Math.round(extrusion * 0.65)}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="url(#metal)"/><rect x="${q.x - 15}" y="${q.y - 15}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="#171e2b"/><rect x="${q.x - 8}" y="${q.y - 8}" width="${q.width + 16}" height="${q.height + 16}" rx="39" fill="none" stroke="#58606e" stroke-width="2"/>`);
   const photoLayer = await place(source, photo, width, height);
   const inside = await sharp(photoLayer).composite([{ input: screenMask, blend: 'dest-in' }]).png().toBuffer();
-  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }] : s.mode === 'plain' && !cutout ? [{ input: photoLayer }] : [];
+  const bezel = svg(width, height, `<rect x="${q.x - 14}" y="${q.y - 14}" width="${q.width + 28}" height="${q.height + 28}" rx="45" fill="none" stroke="#b9c7d5" stroke-opacity=".55" stroke-width="2"/><rect x="${q.x + q.width / 2 - 46}" y="${q.y + 9}" width="92" height="19" rx="10" fill="#101724"/><circle cx="${q.x + q.width / 2 + 29}" cy="${q.y + 18}" r="4" fill="#354861"/><rect x="${q.x + q.width + 16}" y="${q.y + 120}" width="5" height="58" rx="2" fill="#8b9bb0"/>`);
+  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : s.mode === 'plain' && !cutout ? [{ input: photoLayer }] : [];
   let adornment;
   if (decoration) {
     const m = await sharp(decoration).metadata(), dw = Math.round(width * s.decorationScale), dh = Math.round(dw * m.height / m.width);
@@ -66,13 +77,23 @@ export async function compose({ source, cutout, decoration, options }) {
     if (s.shadow > 0 && s.mode === 'frame') {
       const { data } = await sharp(foreground).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       for (let i = 0; i < data.length; i += 4) { data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = Math.round(data[i + 3] * s.shadow); }
-      const shadow = await sharp(data, { raw: { width, height, channels: 4 } }).blur(10).png().toBuffer();
-      const shifted = await place(shadow, { x: 8, y: 12, width, height }, width, height);
+      const shadow = await sharp(data, { raw: { width, height, channels: 4 } }).blur(10 + s.depth * 10).png().toBuffer();
+      const shifted = await place(shadow, { x: Math.round(8 + s.depth * 24), y: Math.round(12 + s.depth * 28), width, height }, width, height);
       // A subject casts a shadow onto the phone, not across its own face.
       layers.push({ input: shifted }, { input: foreground });
     } else layers.push({ input: foreground });
   }
   if (adornment && s.decorationDepth === 'front') layers.push({ input: adornment });
+  if (s.mode === 'frame') {
+    const plane = await canvas(width, height).composite(layers).png().toBuffer();
+    const m = frameMatrix(s), cx = width / 2, cy = height / 2;
+    const transform = `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${cx - m.a * cx - m.c * cy} ${cy - m.b * cx - m.d * cy})`;
+    layers.splice(0, layers.length, { input: await sharp(svg(width, height, `<image width="${width}" height="${height}" transform="${transform}" href="data:image/png;base64,${plane.toString('base64')}"/>`)).png().toBuffer() });
+  }
+  for (const transform of s.stickerTransforms) {
+    const sticker = stickers.find(item => item.id === transform.id);
+    if (sticker) layers.push({ input: await place(sticker.bytes, stickerRect(sticker, transform, g), width, height) });
+  }
   const bytes = await canvas(width, height, s.mode === 'sticker' ? '#00000000' : s.background).composite(layers).png().toBuffer();
   return { bytes, width, height, options: s, geometry: g };
 }
