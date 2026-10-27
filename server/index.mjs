@@ -54,7 +54,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
     try {
       const url = new URL(req.url, 'http://localhost');
-      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 1 }); return; }
+      if (req.method === 'GET' && url.pathname === '/health') { send(200, { service: 'reel-talk-popout', version: 2, capabilities: ['contour-cutout', 'transparent-sticker', 'mask-photo-sync'] }); return; }
       const supplied = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''));
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
