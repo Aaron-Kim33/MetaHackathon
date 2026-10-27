@@ -30,6 +30,14 @@ export function containedImage(source: Dimensions, width: number, maxHeight = 44
   return { x: (width - imageWidth) / 2, y: 0, width: imageWidth, height: imageHeight };
 }
 export function imagePoint(x: number, y: number, image: { x: number; y: number; width: number; height: number }): BrushPoint | null {
+  if (![x, y, image.x, image.y, image.width, image.height].every(Number.isFinite)) return null;
   if (image.width <= 0 || image.height <= 0 || x < image.x || y < image.y || x > image.x + image.width || y > image.y + image.height) return null;
   return { x: (x - image.x) / image.width, y: (y - image.y) / image.height };
+}
+
+export type PageBounds = { pageX: number; pageY: number; width: number; height: number };
+export function pageImagePoint(pageX: number, pageY: number, bounds: PageBounds, source: Dimensions): BrushPoint | null {
+  if (![pageX, pageY, bounds.pageX, bounds.pageY, bounds.width, bounds.height, source.width, source.height].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0 || source.width <= 0 || source.height <= 0) return null;
+  const image = containedImage(source, bounds.width, bounds.height);
+  return imagePoint(pageX - bounds.pageX, pageY - bounds.pageY, image);
 }

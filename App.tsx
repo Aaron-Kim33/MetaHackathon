@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Image, LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
@@ -11,6 +11,7 @@ import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
 import { GestureCanvas } from './src/GestureCanvas';
 import { MaskEditor } from './src/MaskEditor';
+import { SourcePicker } from './src/SourcePicker';
 import type { BrushStroke } from './src/layout';
 
 type ButtonProps = { title: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean };
@@ -33,7 +34,6 @@ function Editor() {
   const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
-  const [canvasWidth, setCanvasWidth] = useState(300);
   const lock = useRef(false), alive = useRef(true);
   const latestSnapshot = useRef<Snapshot>({ view, draft, history, projects, pendingJob });
   latestSnapshot.current = { view, draft, history, projects, pendingJob };
@@ -133,15 +133,13 @@ function Editor() {
       throw error;
     }
   }); };
-  const sourceHeight = view ? canvasWidth * view.project.height / view.project.width : 0;
-  const onCanvasLayout = (event: LayoutChangeEvent) => setCanvasWidth(event.nativeEvent.layout.width);
   return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView scrollEnabled={!interacting} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
     <View style={styles.top}><View><Text style={styles.eyebrow}>REEL TALK / CREATIVE STUDIO</Text><Text style={styles.brand}>밖으로, 톡.</Text></View><Pressable accessibilityRole="button" onPress={() => setShowSettings(!showSettings)}><Text style={styles.settings}>설정</Text></Pressable></View>
     <Text style={styles.subtitle}>내 사진이 프레임을 벗어나는 순간.</Text>
     {showSettings && <View style={styles.panel}><Text style={styles.panelTitle}>PC 연결</Text><Text style={styles.help}>휴대폰과 PC를 같은 Wi-Fi에 연결하세요.</Text><TextInput accessibilityLabel="PC 서버 주소" style={styles.input} value={connection.url} onChangeText={url => setConnection(current => ({ ...current, url }))} autoCapitalize="none" autoCorrect={false} editable={!disabled} /><TextInput accessibilityLabel="PC 연결 코드" placeholder="PC 연결 코드 · 모델 API 키 아님" secureTextEntry style={styles.input} value={connection.token} onChangeText={token => setConnection(current => ({ ...current, token }))} autoCapitalize="none" editable={!disabled} /><Button title="연결 확인" onPress={check} disabled={disabled} secondary />{status && <Text style={styles.help}>예약된 호출 / 설정 한도 · SAM {status.usage.sam.reserved}/{status.usage.sam.cap} · 이미지 {status.usage.image.reserved}/{status.usage.image.cap}</Text>}</View>}
     <View style={styles.row}><View style={{ flex: 1 }}><Button title={view ? '새 사진' : '사진 선택'} onPress={choosePhoto} disabled={disabled} /></View><View style={{ flex: 1 }}><Button title="연습용 그림" onPress={useFixture} secondary disabled={disabled} /></View></View>
-    <View style={styles.canvas} onLayout={onCanvasLayout}>
-      {!view ? <View style={styles.empty}><Text style={styles.emptyMark}>↗</Text><Text style={styles.emptyTitle}>평범한 한 장에서{ '\n' }입체적인 한 장으로.</Text><Text style={styles.help}>사진을 선택해 시작하세요.</Text></View> : picking ? <Pressable accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onPress={event => setPoint({ x: Math.min(1, Math.max(0, event.nativeEvent.locationX / canvasWidth)), y: Math.min(1, Math.max(0, event.nativeEvent.locationY / sourceHeight)) })}><Image source={{ uri: `data:image/png;base64,${view.source}` }} style={{ width: '100%', height: sourceHeight }} resizeMode="contain" />{view.project.candidates.map(candidate => candidate.box ? <View key={candidate.id} pointerEvents="none" style={{position: 'absolute', left: candidate.box.left / view.project.width * canvasWidth, top: candidate.box.top / view.project.height * sourceHeight, width: (candidate.box.right - candidate.box.left) / view.project.width * canvasWidth, height: (candidate.box.bottom - candidate.box.top) / view.project.height * sourceHeight, borderWidth: 2, borderColor: '#7260cb'}}><Text style={{backgroundColor: '#7260cb', color: '#fff', fontSize: 11, alignSelf: 'flex-start'}}>{candidate.label}</Text></View> : null)}{point && <View pointerEvents="none" style={[styles.point, { left: point.x * canvasWidth - 12, top: point.y * sourceHeight - 12 }]} />}</Pressable> : <GestureCanvas view={view} options={draft || view.options} disabled={disabled} onInteracting={setInteracting} onCommit={options => { setDraft(options); render(options); }} />}
+    <View style={styles.canvas}>
+      {!view ? <View style={styles.empty}><Text style={styles.emptyMark}>↗</Text><Text style={styles.emptyTitle}>평범한 한 장에서{ '\n' }입체적인 한 장으로.</Text><Text style={styles.help}>사진을 선택해 시작하세요.</Text></View> : picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas view={view} options={draft || view.options} disabled={disabled} onInteracting={setInteracting} onCommit={options => { setDraft(options); render(options); }} />}
       {view?.project.provenance === 'synthetic-fixture' && <View style={styles.fixtureBadge}><Text style={styles.fixtureText}>연습용 벡터 그림 · AI 분리 아님</Text></View>}
     </View>
     <View style={styles.message}>{busy ? <ActivityIndicator color="#7260cb" /> : <Text style={styles.dot}>●</Text>}<Text accessibilityLiveRegion="polite" style={styles.messageText}>{message}</Text></View>

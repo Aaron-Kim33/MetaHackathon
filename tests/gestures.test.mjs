@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { containedImage, imagePoint, gesturePhoto, photoLayout } from '../src/layout.ts';
+import { containedImage, imagePoint, pageImagePoint, gesturePhoto, photoLayout } from '../src/layout.ts';
+import { MeasuredBrush } from '../src/brush.ts';
 
 const source = { width: 800, height: 1200 };
 const initial = { ratio: 'portrait', zoom: 1.25, x: 0, y: -0.1 };
@@ -31,4 +32,36 @@ test('brush coordinates ignore letterboxing and map the visible image back to so
   assert.equal(imagePoint(0, 100, image), null);
   assert.deepEqual(imagePoint(150, 220, image), { x: 0.5, y: 0.5 });
   assert.equal(imagePoint(150, 441, image), null);
+});
+
+test('touch mapping uses measured page bounds after scrolling, not child-local touch positions', () => {
+  const source = { width: 800, height: 1200 };
+  const normal = pageImagePoint(170, 500, { pageX: 20, pageY: 280, width: 300, height: 440 }, source);
+  const scrolled = pageImagePoint(170, 340, { pageX: 20, pageY: 120, width: 300, height: 440 }, source);
+  assert.ok(Math.abs(normal.x - 0.5) < 1e-12 && Math.abs(normal.y - 0.5) < 1e-12);
+  assert.deepEqual(scrolled, normal);
+  assert.equal(pageImagePoint(20, 500, { pageX: 20, pageY: 280, width: 300, height: 440 }, source), null);
+  assert.equal(pageImagePoint(NaN, 500, { pageX: 20, pageY: 280, width: 300, height: 440 }, source), null);
+});
+
+test('a quick tap remains at the touched pixel when native measurement returns after finger release', () => {
+  const path = new MeasuredBrush('erase', 0.025, { width: 800, height: 1200 });
+  path.push(170, 500);
+  path.end();
+  assert.deepEqual(path.snapshot().points, []);
+  path.locate({ pageX: 20, pageY: 280, width: 300, height: 440 });
+  const [point] = path.snapshot().points;
+  assert.ok(Math.abs(point.x - 0.5) < 1e-12 && Math.abs(point.y - 0.5) < 1e-12);
+  assert.equal(path.push(180, 500), false);
+});
+
+test('queued brush motion keeps its measured origin and ignores the image margins', () => {
+  const path = new MeasuredBrush('restore', 0.01, { width: 100, height: 1000 });
+  path.push(10, 210); // Left margin, outside the narrow displayed image.
+  path.push(160, 210);
+  path.push(160, 430);
+  path.locate({ pageX: 10, pageY: 210, width: 300, height: 440 });
+  assert.deepEqual(path.snapshot().points, [{ x: 0.5, y: 0 }, { x: 0.5, y: 0.5 }]);
+  assert.ok(path.push(160, 650));
+  assert.deepEqual(path.snapshot().points.at(-1), { x: 0.5, y: 1 });
 });
