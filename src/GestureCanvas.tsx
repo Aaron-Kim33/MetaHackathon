@@ -4,7 +4,7 @@ import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
 import { gesturePhoto, photoLayout } from './layout';
 
-type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void };
+type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean };
 const uri = (data: string) => ({ uri: `data:image/png;base64,${data}` });
 function touchState(event: GestureResponderEvent) {
   const touches = event.nativeEvent.touches;
@@ -19,7 +19,8 @@ function touchState(event: GestureResponderEvent) {
 }
 
 export function GestureCanvas(props: Props) {
-  const [width, setWidth] = useState(300), [enabled, setEnabled] = useState(false), [compare, setCompare] = useState(false);
+  const [width, setWidth] = useState(300), [internalEnabled, setEnabled] = useState(false), [internalCompare, setCompare] = useState(false);
+  const enabled = props.touchEnabled ?? internalEnabled, compare = props.compare ?? internalCompare;
   const [live, setLive] = useState<EditOptions | null>(null);
   const current = useRef({ ...props, width, enabled, compare });
   current.current = { ...props, width, enabled, compare };
@@ -65,11 +66,11 @@ export function GestureCanvas(props: Props) {
   const decorationHeight = decoration ? decorationWidth * decoration.height / decoration.width : 0;
   const ornament = decoration ? <Image pointerEvents="none" source={uri(decoration.data)} style={{ position: 'absolute', left: (options.decorationX * layout.width - decorationWidth / 2) * scale, top: (options.decorationY * layout.height - decorationHeight / 2) * scale, width: decorationWidth * scale, height: decorationHeight * scale }} /> : null;
   const subject = props.view.subject ? <Image pointerEvents="none" source={uri(props.view.subject)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} /> : null;
-  return <View>
-    <View style={styles.toolbar}>
+  return <View style={props.compact ? { flex: 1 } : undefined}>
+    {!props.compact && <View style={styles.toolbar}>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: enabled }} disabled={props.disabled} onPress={() => setEnabled(!enabled)} style={[styles.tool, enabled && styles.active]}><Text style={[styles.label, enabled && styles.activeLabel]}>{enabled ? '터치 조절 켜짐' : '터치로 조절'}</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="누르고 있는 동안 원본 보기" disabled={props.disabled} onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} style={styles.tool}><Text style={styles.label}>누르고 원본 보기</Text></Pressable>
-    </View>
+    </View>}
     <View onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {compare ? <Image pointerEvents="none" source={uri(props.view.source)} resizeMode="contain" style={StyleSheet.absoluteFill} /> : !localPreview ? <Image pointerEvents="none" source={uri(props.view.image)} style={StyleSheet.absoluteFill} resizeMode="contain" /> : <>
         <View pointerEvents="none" style={{ position: 'absolute', left: (q.x - 15) * scale, top: (q.y - 15) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#171e2b' }} />
@@ -80,7 +81,7 @@ export function GestureCanvas(props: Props) {
         {options.decorationDepth === 'front' && ornament}
       </>}
     </View>
-    {enabled && <Text style={styles.hint}>한 손가락으로 이동 · 두 손가락으로 확대{live ? ' · 조절 중' : ''}</Text>}
+    {!props.compact && enabled && <Text style={styles.hint}>한 손가락으로 이동 · 두 손가락으로 확대{live ? ' · 조절 중' : ''}</Text>}
   </View>;
 }
 const styles = StyleSheet.create({ toolbar: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, padding: 10, backgroundColor: '#F5F1EB' }, tool: { paddingVertical: 9, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#fff' }, active: { backgroundColor: '#7260cb' }, label: { fontSize: 11, color: '#6D607F', fontWeight: '600' }, activeLabel: { color: '#fff' }, hint: { textAlign: 'center', color: '#796E86', backgroundColor: '#F5F1EB', padding: 8, fontSize: 11 } });

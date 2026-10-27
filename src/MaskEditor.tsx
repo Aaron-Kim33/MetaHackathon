@@ -5,11 +5,11 @@ import type { ProjectView } from './client';
 import { BrushStroke, containedImage } from './layout';
 import { MeasuredBrush } from './brush';
 
-type Props = { visible: boolean; view: ProjectView; onClose: () => void; onApply: (strokes: BrushStroke[]) => Promise<void>; onReset: () => Promise<void> };
+type Props = { visible: boolean; view: ProjectView; onClose: () => void; onApply: (strokes: BrushStroke[]) => Promise<void>; onReset: () => Promise<void>; embedded?: boolean; viewportHeight?: number };
 export function MaskEditor(props: Props) {
   const [width, setWidth] = useState(300), [radius, setRadius] = useState(0.025);
   const [strokes, setStrokes] = useState<BrushStroke[]>([]), [drawing, setDrawing] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const image = containedImage(props.view.project, width);
+  const image = containedImage(props.view.project, width, props.embedded ? Math.max(32, (props.viewportHeight || 440) - 126) : 440);
   const current = useRef({ source: props.view.project, radius, busy }); current.current = { source: props.view.project, radius, busy };
   const records = useRef<BrushStroke[]>([]);
   const canvas = useRef<React.ComponentRef<typeof View>>(null);
@@ -53,20 +53,29 @@ export function MaskEditor(props: Props) {
     catch (failure) { setError(failure instanceof Error ? failure.message : '보정을 적용하지 못했어요.'); }
     finally { setBusy(false); }
   };
-  const tool = (title: string, selected: boolean, onPress: () => void, disabled = false) => <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled: busy || drawing || disabled }} disabled={busy || drawing || disabled} onPress={onPress} style={[styles.button, selected && styles.selected, (busy || drawing || disabled) && styles.disabled]}><Text style={[styles.label, selected && styles.selectedLabel]}>{title}</Text></Pressable>;
-  return <Modal visible={props.visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!busy) props.onClose(); }}><SafeAreaView style={styles.safe}><ScrollView scrollEnabled={!drawing} contentContainerStyle={styles.page}>
-    <View style={styles.header}><Text style={styles.title}>누끼 다듬기</Text>{tool('닫기', false, props.onClose)}</View>
-    <Text style={styles.help}>지울 부분을 칠한 뒤 ‘보정 적용’을 누르세요.{ '\n' }처음 상태로 돌아가려면 ‘누끼 보정 초기화’를 누르세요.</Text>
-    <View style={styles.row}><Text style={styles.help}>지우기 브러시</Text>{tool('한 획 취소', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
-    <View style={styles.row}><Text style={styles.help}>브러시</Text>{([0.01, 0.025, 0.05] as const).map((value, i) => <React.Fragment key={value}>{tool(['작게', '중간', '크게'][i], radius === value, () => setRadius(value))}</React.Fragment>)}</View>
-    <View ref={canvas} collapsable={false} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: image.height, backgroundColor: '#E6E0ED', borderRadius: 16, overflow: 'hidden' }}>
+  const tool = (title: string, selected: boolean, onPress: () => void, disabled = false) => <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled: busy || drawing || disabled }} disabled={busy || drawing || disabled} onPress={onPress} style={[styles.button, props.embedded && { paddingHorizontal: 10, paddingVertical: 9 }, selected && styles.selected, (busy || drawing || disabled) && styles.disabled]}><Text style={[styles.label, selected && styles.selectedLabel]}>{title}</Text></Pressable>;
+  const drawingCanvas = <View ref={canvas} collapsable={false} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: image.height, backgroundColor: '#E6E0ED', borderRadius: 16, overflow: 'hidden' }}>
       <Image pointerEvents="none" source={{ uri: `data:image/png;base64,${props.view.source}` }} style={{ position: 'absolute', left: image.x, width: image.width, height: image.height, opacity: 0.2 }} />
       {props.view.subject && <Image pointerEvents="none" source={{ uri: `data:image/png;base64,${props.view.subject}` }} style={{ position: 'absolute', left: image.x, width: image.width, height: image.height }} />}
       {strokes.flatMap((stroke, index) => stroke.points.map((p, i) => {
         const r = stroke.radius * Math.min(image.width, image.height);
         return <View pointerEvents="none" key={`${index}-${i}`} style={{ position: 'absolute', left: image.x + p.x * image.width - r, top: p.y * image.height - r, width: r * 2, height: r * 2, borderRadius: r, backgroundColor: '#e15c6d55' }} />;
       }))}
-    </View>
+    </View>;
+  const sizes = ([0.01, 0.025, 0.05] as const).map((value, i) => <React.Fragment key={value}>{tool(['작게', '중간', '크게'][i], radius === value, () => setRadius(value))}</React.Fragment>);
+  if (props.embedded) return <View style={{ flex: 1, width: '100%', justifyContent: 'center', gap: 6 }}>
+    <View style={styles.header}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>누끼 다듬기</Text>{tool('닫기', false, props.onClose)}</View>
+    <View style={[styles.row, { gap: 6 }]}>{sizes}{tool('↶', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
+    {drawingCanvas}
+    <View style={[styles.row, { gap: 6 }]}>{tool(busy ? '적용 중…' : '보정 적용', true, () => { void action(false); }, !strokes.length)}{tool('누끼 보정 초기화', false, () => { void action(true); })}</View>
+    {error ? <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.error, { color: '#FFB9C1', position: 'absolute', left: 6, right: 6, top: 78, backgroundColor: '#45232A', padding: 8 }]}>{error}</Text> : null}
+  </View>;
+  return <Modal visible={props.visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!busy) props.onClose(); }}><SafeAreaView style={styles.safe}><ScrollView scrollEnabled={!drawing} contentContainerStyle={styles.page}>
+    <View style={styles.header}><Text style={styles.title}>누끼 다듬기</Text>{tool('닫기', false, props.onClose)}</View>
+    <Text style={styles.help}>지울 부분을 칠한 뒤 ‘보정 적용’을 누르세요.{ '\n' }처음 상태로 돌아가려면 ‘누끼 보정 초기화’를 누르세요.</Text>
+    <View style={styles.row}><Text style={styles.help}>지우기 브러시</Text>{tool('한 획 취소', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
+    <View style={styles.row}><Text style={styles.help}>브러시</Text>{sizes}</View>
+    {drawingCanvas}
     {error ? <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text> : null}
     {busy ? <ActivityIndicator color="#7260cb" /> : null}
     <View style={styles.row}>{tool('보정 적용', true, () => { void action(false); }, !strokes.length)}{tool('누끼 보정 초기화', false, () => { void action(true); })}</View>
