@@ -47,13 +47,13 @@ export class SnapshotJournal {
       await this.storage.write(name, data);
       this.cache.set(key, { name, data }); return `@asset/${name}`;
     };
-    const [image, source, subject, photoSource, baseImage, primaryImage, stickers, decorationImage, pendingPhoto] = await Promise.all([
-      field('image', view.image), field('source', view.source), field('subject', view.subject), field('photoSource', view.photoSource), field('baseImage', view.baseImage), field('primaryImage', view.primaryImage),
+    const [image, source, subject, photoSource, baseImage, primaryImage, subjectShadow, stickers, decorationImage, pendingPhoto] = await Promise.all([
+      field('image', view.image), field('source', view.source), field('subject', view.subject), field('photoSource', view.photoSource), field('baseImage', view.baseImage), field('primaryImage', view.primaryImage), field('subjectShadow', view.subjectShadow),
       Promise.all((view.stickers || []).map(async item => ({ ...item, data: (await field(`sticker:${item.id}`, item.data))! }))),
       view.decorationImage ? field('decoration', view.decorationImage.data).then(data => ({ ...view.decorationImage!, data: data! })) : view.decorationImage,
       view.pendingPhoto ? field(`pending:${view.pendingPhoto.id}`, view.pendingPhoto.source).then(source => ({ ...view.pendingPhoto!, source: source! })) : view.pendingPhoto,
     ]);
-    return { ...result, image: image!, source: source!, subject, photoSource, baseImage, primaryImage, stickers, decorationImage, pendingPhoto };
+    return { ...result, image: image!, source: source!, subject, photoSource, baseImage, primaryImage, subjectShadow, stickers, decorationImage, pendingPhoto };
   }
   private async writeSnapshot(snapshot: Snapshot) {
     await this.storage.ensure();

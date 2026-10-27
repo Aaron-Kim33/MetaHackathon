@@ -1,8 +1,9 @@
 import sharp from 'sharp';
-import { frameMatrix } from '../src/frame.ts';
+import { buildCompositionScene, compositionSvg } from '../src/composition-scene.ts';
+import { subjectShadow } from './subject-shadow.mjs';
 import { insist } from './errors.mjs';
 import { orderedLayers } from '../src/layer-order.ts';
-import { photoLayout, stickerRect } from '../src/layout.ts';
+import { photoLayout } from '../src/layout.ts';
 
 export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.55, x: 0, y: -0.15, shadow: 0.48, tilt: -8, depth: 0.75, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
 
@@ -39,77 +40,26 @@ export function geometry(source, options) {
   return photoLayout(source, s);
 }
 
-const svg = (width, height, content) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${content}</svg>`);
-const canvas = (width, height, background = '#00000000') => sharp({ create: { width, height, channels: 4, background } });
-
 export async function normalisePhoto(bytes) {
   const result = await sharp(bytes, { limitInputPixels: 40000000 }).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).removeAlpha().png().toBuffer({ resolveWithObject: true });
   return { bytes: result.data, width: result.info.width, height: result.info.height };
 }
 
-// Both photo and subject use this exact transform; negative offsets are clipped explicitly.
-async function place(bytes, rect, width, height) {
-  const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
-  const right = Math.min(width, rect.x + rect.width), bottom = Math.min(height, rect.y + rect.height);
-  if (right <= left || bottom <= top) return canvas(width, height).png().toBuffer();
-  const image = await sharp(bytes).resize(rect.width, rect.height, { fit: 'fill' }).extract({ left: left - rect.x, top: top - rect.y, width: right - left, height: bottom - top }).png().toBuffer();
-  return canvas(width, height).composite([{ input: image, left, top }]).png().toBuffer();
-}
-
-export async function compose({ source, cutout, decoration, stickers = [], options }) {
+export async function compose({ source, cutout, decoration, stickers = [], options, shadow }) {
   const s = settings(options), dimensions = await sharp(source).metadata();
-  if (s.hidePrimary) cutout = null;
-  const g = geometry(dimensions, s), { width, height, screen: q, photo } = g;
-  const screenMask = svg(width, height, `<rect x="${q.x}" y="${q.y}" width="${q.width}" height="${q.height}" rx="30" fill="white"/>`);
-  const extrusion = Math.round(28 * s.depth);
-  const phone = svg(width, height, `<defs><linearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#75849a"/><stop offset=".4" stop-color="#253246"/><stop offset="1" stop-color="#101827"/></linearGradient><filter id="s" x="-30%" y="-20%" width="160%" height="150%"><feGaussianBlur stdDeviation="19"/></filter></defs><rect x="${q.x - 12}" y="${q.y + 6}" width="${q.width + 24}" height="${q.height + 36}" rx="48" fill="#0d1725" opacity=".18" filter="url(#s)"/><rect x="${q.x - 15 + extrusion}" y="${q.y - 15 + Math.round(extrusion * 0.65)}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="url(#metal)"/><rect x="${q.x - 15}" y="${q.y - 15}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="#171e2b"/><rect x="${q.x - 8}" y="${q.y - 8}" width="${q.width + 16}" height="${q.height + 16}" rx="39" fill="none" stroke="#58606e" stroke-width="2"/>`);
-  const photoLayer = await place(source, photo, width, height);
-  const inside = await sharp(photoLayer).composite([{ input: screenMask, blend: 'dest-in' }]).png().toBuffer();
-  const bezel = svg(width, height, `<rect x="${q.x - 14}" y="${q.y - 14}" width="${q.width + 28}" height="${q.height + 28}" rx="45" fill="none" stroke="#b9c7d5" stroke-opacity=".55" stroke-width="2"/><rect x="${q.x + q.width / 2 - 46}" y="${q.y + 9}" width="92" height="19" rx="10" fill="#101724"/><circle cx="${q.x + q.width / 2 + 29}" cy="${q.y + 18}" r="4" fill="#354861"/><rect x="${q.x + q.width + 16}" y="${q.y + 120}" width="5" height="58" rx="2" fill="#8b9bb0"/>`);
-  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : [];
-  const primary = s.mode === 'plain' && !cutout && !s.hidePrimary ? [{ input: photoLayer }] : [];
-  let adornment;
-  if (decoration) {
-    const m = await sharp(decoration).metadata(), dw = Math.round(width * s.decorationScale), dh = Math.round(dw * m.height / m.width);
-    adornment = await place(decoration, { x: Math.round(s.decorationX * width - dw / 2), y: Math.round(s.decorationY * height - dh / 2), width: dw, height: dh }, width, height);
-    if (s.decorationDepth === 'back') layers.push({ input: adornment });
-  }
-  if (cutout) {
-    const m = await sharp(cutout).metadata();
-    insist(m.width === dimensions.width && m.height === dimensions.height && m.hasAlpha, '피사체와 원본 사진의 좌표가 맞지 않아요.');
-    const subject = await place(cutout, photo, width, height);
-    // The lower edge remains inside the rounded screen; the top and sides can escape.
-    const escapeMask = svg(width, height, `<rect width="${width}" height="${q.y}" fill="white"/><rect x="0" y="${q.y}" width="${width}" height="${q.height - 40}" fill="white"/><rect x="${q.x}" y="${q.y}" width="${q.width}" height="${q.height}" rx="30" fill="white"/>`);
-    const foreground = s.mode !== 'frame' ? subject : await sharp(subject).composite([{ input: escapeMask, blend: 'dest-in' }]).png().toBuffer();
-    if (s.shadow > 0 && s.mode === 'frame') {
-      const { data } = await sharp(foreground).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-      for (let i = 0; i < data.length; i += 4) { data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = Math.round(data[i + 3] * s.shadow); }
-      const shadow = await sharp(data, { raw: { width, height, channels: 4 } }).blur(10 + s.depth * 10).png().toBuffer();
-      const shifted = await place(shadow, { x: Math.round(8 + s.depth * 24), y: Math.round(12 + s.depth * 28), width, height }, width, height);
-      // A subject casts a shadow onto the phone, not across its own face.
-      primary.push({ input: shifted }, { input: foreground });
-    } else primary.push({ input: foreground });
-  }
-  if (adornment && s.decorationDepth === 'front') primary.push({ input: adornment });
-  const projectPlane = async items => {
-    let bytes = await canvas(width, height).composite(items).png().toBuffer();
-    if (s.mode === 'frame') {
-      const m = frameMatrix(s), cx = width / 2, cy = height / 2;
-      const transform = `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${cx - m.a * cx - m.c * cy} ${cy - m.b * cx - m.d * cy})`;
-      bytes = await sharp(svg(width, height, `<image width="${width}" height="${height}" transform="${transform}" href="data:image/png;base64,${bytes.toString('base64')}"/>`)).png().toBuffer();
-    }
-    return bytes;
-  };
-  const [background, primaryBytes] = await Promise.all([projectPlane(layers), projectPlane(primary)]);
-  const baseBytes = await canvas(width, height, s.mode === 'sticker' ? '#00000000' : s.background).composite([{ input: background }]).png().toBuffer();
-  const ordered = [{ input: baseBytes }];
-  for (const id of s.layerOrder) {
-    if (id === 'primary') { ordered.push({ input: primaryBytes }); continue; }
-    const sticker = stickers.find(item => item.id === id), transform = s.stickerTransforms.find(item => item.id === id);
-    if (sticker && transform) ordered.push({ input: await place(sticker.bytes, stickerRect(sticker, transform, g), width, height) });
-  }
-  const bytes = await canvas(width, height).composite(ordered).png().toBuffer();
-  return { bytes, baseBytes, primaryBytes, width, height, options: s, geometry: g };
+  if (cutout) { const m = await sharp(cutout).metadata(); insist(m.width === dimensions.width && m.height === dimensions.height && m.hasAlpha, '피사체와 원본 사진의 좌표가 맞지 않아요.'); }
+  const shadowBytes = cutout ? shadow || await subjectShadow(cutout) : null;
+  const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
+  const scene = buildCompositionScene({ source: dimensions, subject: !!cutout, shadow: !!shadowBytes, decoration: decorationMeta, stickers }, s);
+  const dataUri = bytes => `data:image/png;base64,${bytes.toString('base64')}`;
+  const assets = { source: dataUri(source) };
+  if (cutout) assets.subject = dataUri(cutout);
+  if (shadowBytes) assets.shadow = dataUri(shadowBytes);
+  if (decoration) assets.decoration = dataUri(decoration);
+  for (const sticker of stickers) assets[`sticker:${sticker.id}`] = dataUri(sticker.bytes);
+  const raster = part => sharp(Buffer.from(compositionSvg(scene, assets, part))).png().toBuffer();
+  const [bytes, baseBytes, primaryBytes] = await Promise.all([raster('all'), raster('background'), raster('primary')]);
+  return { bytes, baseBytes, primaryBytes, width: scene.width, height: scene.height, options: s, geometry: photoLayout(dimensions, s) };
 }
 
 export async function cutoutFromRaster(source, raster, box, maskWidth, maskHeight) {

@@ -20,6 +20,8 @@ export type ProjectView = {
   image: string; source: string; photoSource?: string | null; subject?: string | null; decorationImage?: { data: string; width: number; height: number } | null; width: number; height: number; options: EditOptions; usage: Usage;
   baseImage?: string | null; baseOptions?: EditOptions; imageOptions?: EditOptions;
   primaryImage?: string | null;
+  subjectShadow?: string | null;
+  sceneVersion?: number;
   subjectBounds?: { x: number; y: number; width: number; height: number } | null;
   subjectHitMask?: import('./hit-testing').HitMask | null;
   stickers?: { id: string; data: string; width: number; height: number; label: string; hitMask?: import('./hit-testing').HitMask }[];

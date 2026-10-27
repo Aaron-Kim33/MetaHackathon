@@ -4,7 +4,7 @@ import { orderedLayers } from '../src/layer-order.ts';
 import { meaningfulGesture, sameBase, sameOptions, moveLayer, rebaseOptions } from '../src/edit-performance.ts';
 import { SnapshotJournal } from '../src/snapshot-journal.ts';
 const options = { mode: 'plain', zoom: 1, x: 0, stickerTransforms: [{ id: 'a', x: 0.2, y: 0.4, scale: 0.3 }, { id: 'b', x: 0.7, y: 0.4, scale: 0.3 }, { id: 'c', x: 0.5, y: 0.6, scale: 0.3 }] };
-const snapshot = () => ({ view: { project: { id: 'test' }, image: 'I'.repeat(250000), source: 'S'.repeat(250000), subject: 'A'.repeat(250000), baseImage: 'B'.repeat(250000), primaryImage: 'P'.repeat(250000), options, stickers: [{ id: 'a', data: 'T'.repeat(250000) }] }, draft: options, history: [], activeStickerId: 'a', pendingJob: null });
+const snapshot = () => ({ view: { project: { id: 'test' }, image: 'I'.repeat(250000), source: 'S'.repeat(250000), subject: 'A'.repeat(250000), baseImage: 'B'.repeat(250000), primaryImage: 'P'.repeat(250000), subjectShadow: 'Z'.repeat(250000), options, stickers: [{ id: 'a', data: 'T'.repeat(250000) }] }, draft: options, history: [], activeStickerId: 'a', pendingJob: null });
 function memoryStorage() {
   const files = new Map(), writes = [];
   return { files, writes, ensure: async () => {}, read: async name => { if (!files.has(name)) throw Error('missing'); return files.get(name); }, write: async (name, data) => { files.set(name, data); writes.push({ name, data }); }, list: async () => [...files.keys()], remove: async name => { files.delete(name); } };
@@ -42,7 +42,7 @@ test('saving selection/position updates does not serialize or rewrite unchanged 
   const storage = memoryStorage(), journal = new SnapshotJournal(storage), first = snapshot();
   await journal.save(first);
   const mediaWrites = storage.writes.filter(item => item.name.endsWith('.b64')).length;
-  assert.equal(mediaWrites, 6);
+  assert.equal(mediaWrites, 7);
   const next = { ...first, activeStickerId: null, draft: { ...options, x: 0.2 } };
   await journal.save(next);
   assert.equal(storage.writes.filter(item => item.name.endsWith('.b64')).length, mediaWrites);
@@ -51,6 +51,7 @@ test('saving selection/position updates does not serialize or rewrite unchanged 
   const restored = await new SnapshotJournal(storage).restore();
   assert.equal(restored.view.source, first.view.source);
   assert.equal(restored.view.baseImage, first.view.baseImage);
+  assert.equal(restored.view.subjectShadow, first.view.subjectShadow);
   assert.equal(restored.view.stickers[0].data, first.view.stickers[0].data);
   assert.equal(restored.draft.x, 0.2);
 });
@@ -71,7 +72,7 @@ test('only two journal versions keep media files, without touching exports or or
   storage.files.set('popout-export.png', 'EXPORT');
   for (let i = 0; i < 8; i++) await journal.save({ ...first, view: { ...first.view, image: `VERSION-${i}` } });
   assert.equal(storage.files.get('popout-export.png'), 'EXPORT');
-  assert.equal([...storage.files.keys()].filter(name => name.endsWith('.b64')).length, 7);
+  assert.equal([...storage.files.keys()].filter(name => name.endsWith('.b64')).length, 8);
   const restored = await new SnapshotJournal(storage).restore();
   assert.equal(restored.view.image, 'VERSION-7');
 });

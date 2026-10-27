@@ -7,11 +7,12 @@ import * as FS from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
+import { COMPOSITION_VERSION } from './src/composition-scene';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
 import { keepSceneVisible, recoverScene } from './src/viewport';
 import { orderedLayers } from './src/layer-order';
-import { sameBase, sameOptions, moveLayer, rebaseOptions } from './src/edit-performance';
+import { sameOptions, moveLayer, rebaseOptions } from './src/edit-performance';
 import { DragTrash } from './src/DragTrash';
 import type { TrashBounds, TrashState } from './src/drag-delete';
 import { GestureCanvas } from './src/GestureCanvas';
@@ -208,8 +209,8 @@ function Editor() {
   const dirty = !!view && !!draft && JSON.stringify(view.options) !== JSON.stringify(draft);
   const disabled = !!busy || !ready;
   useEffect(() => {
-    if (!ready || busy || interacting || maskOpen || !view || !draft || (sameOptions(draft, view.options) && view.primaryImage)) return;
-    const projectId = view.project.id, requested = draft, metadataOnly = !!view.primaryImage && sameBase(draft, view.baseOptions || view.options);
+    if (!ready || busy || interacting || maskOpen || !view || !draft || sameOptions(draft, view.options)) return;
+    const projectId = view.project.id, requested = draft;
     const timer = setTimeout(() => {
       if (lock.current || previewFlight.current) return;
       previewFlight.current = (async () => {
@@ -218,15 +219,9 @@ function Editor() {
             const latest = latestSnapshot.current;
             if (alive.current && latest.view?.project.id === projectId && latest.draft && sameOptions(latest.draft, requested) && !sameOptions(options, requested)) setDraft(options);
           };
-          if (metadataOnly) {
-            const result = await request<{ options: EditOptions }>(connection, '/options', { projectId, options: requested });
-            reconcile(result.options);
-            if (alive.current) setView(current => current?.project.id === projectId ? { ...current, imageOptions: current.imageOptions || current.options, baseOptions: current.baseOptions || current.options, options: result.options } : current);
-          } else {
-            const result = await request<ProjectView>(connection, '/render', { projectId, options: requested, previewOnly: true });
-            reconcile(result.options);
-            if (alive.current) setView(current => current?.project.id === projectId ? { ...current, image: result.image, baseImage: result.baseImage, primaryImage: result.primaryImage, width: result.width, height: result.height, options: result.options, imageOptions: result.options, baseOptions: result.options } : current);
-          }
+          const result = await request<{ options: EditOptions }>(connection, '/options', { projectId, options: requested });
+          reconcile(result.options);
+          if (alive.current) setView(current => current?.project.id === projectId ? { ...current, imageOptions: current.imageOptions || current.options, options: result.options } : current);
         } catch { if (alive.current) setMessage('편집은 기기에 보관해요. 서버 연결 후 저장·공유할 때 다시 반영합니다.'); }
         finally { previewFlight.current = null; }
       })();
@@ -239,7 +234,7 @@ function Editor() {
   const save = (share = false) => { if (!view) return; void task(share ? '공유 파일을 준비하는 중' : '사진을 저장하는 중', async () => {
     setExportMessage(share ? '공유 파일을 준비하고 있어요.' : '휴대폰 사진 보관함에 저장하고 있어요.');
     try {
-    const output = draft && !sameOptions(draft, view.imageOptions || view.options) ? await request<ProjectView>(connection, '/render', { projectId: view.project.id, options: draft }) : view;
+    const output = draft && (view.sceneVersion !== COMPOSITION_VERSION || !sameOptions(draft, view.imageOptions || view.options)) ? await request<ProjectView>(connection, '/render', { projectId: view.project.id, options: draft }) : view;
     if (output !== view) accept(output);
     const uri = await exportPhoto(output);
     if (share) { if (!(await Sharing.isAvailableAsync())) throw new Error('이 기기에서 공유창을 사용할 수 없어요.'); await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: '입체 사진 공유' }); const text = '공유창을 닫았어요. 실제 게시 여부는 대상 앱에서 확인해 주세요.'; setMessage(text); setExportMessage(text); }

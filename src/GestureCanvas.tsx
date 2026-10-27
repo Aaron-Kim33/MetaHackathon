@@ -3,7 +3,8 @@ import {  PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
 import { CachedImage } from './CachedImage';
-import { meaningfulGesture, sameBase } from './edit-performance';
+import { CompositionCanvas } from './CompositionCanvas';
+import { meaningfulGesture } from './edit-performance';
 import { orderedLayers } from './layer-order';
 import { MeasuredCanvasTouch } from './canvas-touch';
 import type { LocalCanvasTouch } from './canvas-touch';
@@ -110,10 +111,8 @@ export function GestureCanvas(props: Props) {
     onPanResponderTerminationRequest: () => false,
   }), []);
   const options = live || props.options, layout = photoLayout(props.view.project, options), scale = width / layout.width;
-  const q = layout.screen, photo = layout.photo;
-  const fm = frameMatrix(options), matrix = [fm.a, fm.b, 0, 0, fm.c, fm.d, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-  const localPreview = !!live || JSON.stringify(options) !== JSON.stringify(props.view.options);
-  const raster = !!props.view.primaryImage && sameBase(options, props.view.baseOptions || props.view.options);
+  const photo = layout.photo;
+  const fm = frameMatrix(options);
   const primaryVisible = !options.hidePrimary && (!!props.view.subject || options.mode === 'plain');
   const layerOrder = orderedLayers(options), visibleOrder = layerOrder.filter(id => id !== 'primary' || primaryVisible);
   const activeKey = props.activeStickerId, activeIndex = activeKey ? visibleOrder.indexOf(activeKey) : -1;
@@ -124,39 +123,11 @@ export function GestureCanvas(props: Props) {
   const rootRect = { x: Math.min(...corners.map(p => p.x)), y: Math.min(...corners.map(p => p.y)), width: Math.max(...corners.map(p => p.x)) - Math.min(...corners.map(p => p.x)), height: Math.max(...corners.map(p => p.y)) - Math.min(...corners.map(p => p.y)) };
   const selectedTransform = options.stickerTransforms?.find(item => item.id === props.activeStickerId), selectedSticker = props.view.stickers?.find(item => item.id === props.activeStickerId);
   const selectedRect = selectedTransform && selectedSticker ? stickerRect(selectedSticker, selectedTransform, layout) : props.activeStickerId === 'primary' && primaryVisible ? rootRect : null;
-  const decoration = props.view.decorationImage, dw = layout.width * options.decorationScale, dh = decoration ? dw * decoration.height / decoration.width : 0;
-  const ornament = decoration ? <CachedImage pointerEvents="none" data={decoration.data} style={{ position: 'absolute', left: (options.decorationX * layout.width - dw / 2) * scale, top: (options.decorationY * layout.height - dh / 2) * scale, width: dw * scale, height: dh * scale }} /> : null;
-  const subject = props.view.subject && !options.hidePrimary ? <CachedImage pointerEvents="none" data={props.view.subject} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} /> : null;
-  const planeStyle = [StyleSheet.absoluteFill, { transform: [{ matrix }] }];
-  const background = raster && props.view.baseImage ? <CachedImage pointerEvents="none" data={props.view.baseImage} style={StyleSheet.absoluteFill} /> : <View pointerEvents="none" style={planeStyle}>
-    {options.mode === 'frame' && <>
-      <View style={{ position: 'absolute', left: (q.x - 15 + 28 * (options.depth || 0)) * scale, top: (q.y - 15 + 18 * (options.depth || 0)) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#253246' }} />
-      <View style={{ position: 'absolute', left: (q.x - 15) * scale, top: (q.y - 15) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#171e2b' }} />
-      <View style={{ position: 'absolute', left: q.x * scale, top: q.y * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><CachedImage data={props.view.photoSource || props.view.source} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View>
-    </>}
-    {options.decorationDepth === 'back' && ornament}
-  </View>;
-  const primary = raster && props.view.primaryImage ? <CachedImage pointerEvents="none" data={props.view.primaryImage} style={StyleSheet.absoluteFill} /> : <View pointerEvents="none" style={planeStyle}>
-    {options.mode === 'plain' ? options.hidePrimary ? null : props.view.subject ? subject : <CachedImage data={props.view.photoSource || props.view.source} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} /> : options.mode === 'sticker' ? subject : <>
-      <View style={{ position: 'absolute', left: 0, top: 0, width, height: (q.y + q.height - 40) * scale, overflow: 'hidden' }}>{subject}</View>
-      {props.view.subject && !options.hidePrimary && <View style={{ position: 'absolute', left: q.x * scale, top: (q.y + q.height - 40) * scale, width: q.width * scale, height: 40 * scale, overflow: 'hidden' }}><View style={{ position: 'absolute', top: -(q.height - 40) * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><CachedImage data={props.view.subject} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View></View>}
-    </>}
-    {options.decorationDepth === 'front' && ornament}
-  </View>;
   return <View style={props.compact ? { flex: 1 } : undefined}>
     {!props.compact && <View style={styles.toolbar}><Pressable disabled={props.disabled} onPress={() => setEnabled(!enabled)} style={styles.tool}><Text style={styles.label}>터치 조절</Text></Pressable><Pressable disabled={props.disabled} onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} style={styles.tool}><Text style={styles.label}>누르고 원본 보기</Text></Pressable></View>}
     <View ref={nativeCanvas} collapsable={false} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {options.mode === 'sticker' && !compare && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#F4F1F7' }]}>{Array.from({ length: 6 * Math.ceil(layout.height / layout.width * 6) }, (_, i) => <View key={i} style={{ width: width / 6, height: width / 6, backgroundColor: (Math.floor(i / 6) + i % 6) % 2 ? '#E0DCE7' : '#F4F1F7' }} />)}</View>}
-      {compare ? <CachedImage pointerEvents="none" data={props.view.source} style={StyleSheet.absoluteFill} resizeMode="contain" /> : !props.view.primaryImage && !localPreview ? <CachedImage pointerEvents="none" data={props.view.image} style={StyleSheet.absoluteFill} /> : <>
-        {background}
-        {layerOrder.map((id, index) => {
-          if (id === 'primary') return <View pointerEvents="none" collapsable={false} key={id} style={[StyleSheet.absoluteFill, { zIndex: index + 1 }]}>{primary}</View>;
-          const t = options.stickerTransforms.find(item => item.id === id), sticker = props.view.stickers?.find(item => item.id === id);
-          if (!t || !sticker) return null;
-          const r = stickerRect(sticker, t, layout);
-          return <View key={id} pointerEvents="none" collapsable={false} style={{ position: 'absolute', left: r.x * scale, top: r.y * scale, width: r.width * scale, height: r.height * scale, zIndex: index + 1 }}><CachedImage data={sticker.data} style={StyleSheet.absoluteFill} /></View>;
-        })}
-      </>}
+      {compare ? <CachedImage pointerEvents="none" data={props.view.source} style={StyleSheet.absoluteFill} resizeMode="contain" /> : <CompositionCanvas view={props.view} options={options} />}
       {selectedRect && !compare && <View pointerEvents="none" style={{ position: 'absolute', left: selectedRect.x * scale, top: selectedRect.y * scale, width: selectedRect.width * scale, height: selectedRect.height * scale, zIndex: 100, borderWidth: 1.5, borderColor: '#A58ADC', borderStyle: 'dashed' }} />}
       {selectedRect && width >= 96 && visibleOrder.length > 1 && !live && !compare && props.onReorder && <View onStartShouldSetResponder={() => true} style={{ position: 'absolute', left: Math.max(5, Math.min(width - 89, selectedRect.x * scale)), top: Math.max(5, Math.min(layout.height * scale - 39, selectedRect.y * scale - 40)), zIndex: 200, flexDirection: 'row', gap: 3, backgroundColor: '#282131EE', padding: 3, borderRadius: 12 }}>
         {(['back', 'front'] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={direction === 'front' ? '레이어 한 단계 앞으로' : '레이어 한 단계 뒤로'} disabled={props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0)} onPress={() => props.onReorder?.(activeKey!, direction)} style={{ width: 36, height: 30, justifyContent: 'center', alignItems: 'center', opacity: props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0) ? 0.3 : 1 }}><Text style={{ color: '#fff', fontSize: 13 }}>{direction === 'front' ? '↑ 앞' : '↓ 뒤'}</Text></Pressable>)}
