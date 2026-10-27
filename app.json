@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Reel Talk · Pop Out",
+    "slug": "reel-talk-popout",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true, "infoPlist": { "NSPhotoLibraryUsageDescription": "입체 콘텐츠로 만들 사진을 선택합니다.", "NSPhotoLibraryAddUsageDescription": "완성된 입체 사진을 앨범에 저장합니다.", "NSLocalNetworkUsageDescription": "개발용 사진 합성 서버에 연결합니다." } },
+    "android": { "usesCleartextTraffic": true },
+    "plugins": [
+      ["expo-image-picker", { "photosPermission": "입체 콘텐츠로 만들 사진을 선택합니다." }],
+      ["expo-media-library", { "photosPermission": "완성된 사진을 확인합니다.", "savePhotosPermission": "완성된 입체 사진을 저장합니다." }]
+    ]
+  }
+}
