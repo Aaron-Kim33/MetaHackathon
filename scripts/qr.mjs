@@ -4,6 +4,21 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+export function terminalQR(url) {
+  const matrix = toQR(url), size = Math.sqrt(matrix.length), extent = size + 8;
+  const dark = (x, y) => x >= 4 && y >= 4 && x < size + 4 && y < size + 4 && matrix[(y - 4) * size + x - 4];
+  const rows = [];
+  for (let y = 0; y < extent; y += 2) {
+    let row = '';
+    for (let x = 0; x < extent; x++) {
+      const top = dark(x, y), bottom = dark(x, y + 1);
+      row += top ? (bottom ? '█' : '▀') : (bottom ? '▄' : ' ');
+    }
+    rows.push(`\x1b[30;47m${row}\x1b[0m`);
+  }
+  return rows.join('\n');
+}
+
 export async function saveQR(url, file) {
   const matrix = toQR(url), size = Math.sqrt(matrix.length), extent = size + 8;
   const modules = [];

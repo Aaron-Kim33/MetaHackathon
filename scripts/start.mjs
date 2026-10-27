@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createApp } from '../server/index.mjs';
 import { lanAddress } from './network.mjs';
-import { saveQR } from './qr.mjs';
+import { saveQR, terminalQR } from './qr.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 process.chdir(root);
@@ -22,6 +22,8 @@ try {
 if (running?.service === 'reel-talk-popout') {
   await saveQR(`exp://${address}:8082`, path.join(root, '.local', 'expo-qr.png'));
   console.log(`출품용 서버가 이미 실행 중입니다.\nExpo Go: exp://${address}:8082\n새로고침: npm run reload\nQR: .local/expo-qr.png`);
+  console.log(terminalQR(`exp://${address}:8082`));
+  console.log('휴대폰 Expo Go에서 위 QR을 스캔하세요. 연결 후 npm run reload를 사용할 수 있습니다.');
   process.exit(0);
 }
 const app = await createApp();
@@ -29,6 +31,8 @@ await new Promise((resolve, reject) => { app.server.once('error', reject); app.s
 console.log(`\nReel Talk · Pop Out\nPC 서버: http://${address}:${port}\n연결 코드: ${app.token}\nMeta 키: ${process.env.MODEL_API_KEY ? '설정됨 (실호출 미검증)' : '미설정 · 연습용 그림 사용 가능'}\n`);
 await saveQR(`exp://${address}:8082`, path.join(root, '.local', 'expo-qr.png'));
 console.log(`Expo Go: exp://${address}:8082 · QR: .local/expo-qr.png`);
+console.log(terminalQR(`exp://${address}:8082`));
+console.log('이 터미널을 켜둔 채 휴대폰 Expo Go에서 위 QR을 스캔하세요. 연결 후 이 터미널에서 r 키로 새로고침할 수 있습니다.');
 const require = createRequire(import.meta.url);
 const expoCli = require.resolve('expo/bin/cli');
 const env = { ...process.env, POPOUT_LOCAL_DEV: '1', POPOUT_API_URL: `http://${address}:${port}`, POPOUT_TOKEN: app.token, REACT_NATIVE_PACKAGER_HOSTNAME: address, EXPO_NO_TELEMETRY: '1', EXPO_OFFLINE: '1' };
