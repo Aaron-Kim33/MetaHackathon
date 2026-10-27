@@ -74,3 +74,29 @@ test('complete mocked SAM and Muse decoration workflow shares the durable reques
   assert.equal((await request('/segment', { projectId, jobId: randomUUID(), prompt: 'person' })).status, 429);
   assert.deepEqual(calls, ['sam-3.1', 'muse-image-1.0', 'sam-3.1']);
 });
+
+test('mask correction is durable, rejects stale edits and resets without any model calls', async t => {
+  await mkdir('.local/tests', { recursive: true });
+  const root = await mkdtemp(path.resolve('.local/tests/mask-flow-'));
+  const app = await createApp({ root, token: 'test-pairing', key: '', creditsConfirmed: false, caps: { sam: 0, image: 0 } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.server.close(resolve)));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const request = (route, value) => fetch(base + route, { method: 'POST', headers: { Authorization: 'Bearer test-pairing', 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const initial = await (await request('/fixture', {})).json();
+  const input = { projectId: initial.project.id, candidateId: initial.project.selectedId, baseRevision: 0, strokes: [{ mode: 'erase', radius: 0.1, points: [{ x: 0.5, y: 0.2 }] }] };
+  const corrected = await (await request('/mask', input)).json();
+  assert.equal(corrected.project.maskRevision, 1);
+  assert.notEqual(corrected.subject, initial.subject);
+  assert.notEqual(corrected.image, initial.image);
+  assert.equal(corrected.source, initial.source);
+  assert.equal((await request('/mask', input)).status, 409);
+  const restoredProject = await app.store.get(initial.project.id);
+  assert.equal(restoredProject.maskRevision, 1);
+  assert.equal(restoredProject.maskEdits[initial.project.selectedId], corrected.project.maskEdits[initial.project.selectedId]);
+  const reset = await (await request('/mask/reset', { ...input, baseRevision: 1 })).json();
+  assert.equal(reset.subject, initial.subject);
+  assert.equal(reset.image, initial.image);
+  assert.equal(reset.project.maskRevision, 2);
+  assert.equal(app.jobs.usage().sam.reserved, 0);
+});

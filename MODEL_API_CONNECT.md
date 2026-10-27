@@ -1,6 +1,8 @@
 # 대회 크레딧으로 SAM·Muse Image 연결하기
 
-기준일: 2026-10-27, Asia/Kuala_Lumpur. 참가자가 제공한 가이드·운영 공지와 아래 Meta 공식 문서를 기준으로 작성했다. 크레딧 신청폼 및 Hackathon Credit Terms의 실제 링크는 사용자가 찾는 중이다. **약관 전문·만료일·계정별 지급 상태를 확인한 것으로 표시하지 않는다.**
+기준일: 2026-10-27, Asia/Kuala_Lumpur. 참가자가 제공한 가이드·운영 공지와 아래 Meta 공식 문서를 기준으로 작성했다. 사용자가 실제 크레딧 신청폼 링크를 제공하고 제출 완료를 알렸다. 도구에서 폼 본문을 열람하지 못했으며 Hackathon Credit Terms 전문 링크는 아직 미확인이다. **약관 전문·만료일·계정별 지급 상태를 확인한 것으로 표시하지 않는다.**
+
+현재 단계: **신청서 제출 완료(사용자 확인) → Billing 지급 확인 대기**. 카드·사업자 정보·키 발급 완료 여부는 아직 확인하지 않았다.
 
 ## 1. Meta Model API 계정 준비
 
@@ -13,14 +15,14 @@ Team ID 위치를 찾지 못하면 팀/프로젝트 대시보드에서 주소를
 
 ## 2. 대회 크레딧 신청
 
-1. [참가자 가이드](https://cerebralvalley.ai/e/meta-ai-developer-hackathon/details)의 **Meta Provided Resources → Claim your $150 in Meta Model API credits**에서 **Meta Global AI Hackathon: Model API Credit Claims** 링크를 연다. 정확한 폼 URL은 확인 전 임의로 만들지 않는다.
+1. [Meta Global AI Hackathon: Model API Credit Claims 신청폼](https://docs.google.com/forms/d/e/1FAIpQLScam78z7tHsNYibiFyJQVFzEgr0coyBTiY568SxxNbsPa3jiw/viewform)을 연다. 사용자가 참가자 가이드에서 가져온 링크이며 **2026-10-27 제출 완료**를 알렸다. 추가 확인 없이 같은 신청을 다시 제출하지 않는다.
 2. 이메일은 **해커톤 참가 신청 때 사용한 이메일**을 입력한다. 운영진은 승인 참가자 목록과 대조한다.
 3. Team ID는 1단계의 **숫자만** 입력한다. 전체 URL, `team_id=`, `&` 뒤 문자열, Project ID, API 키, 해커톤 팀 이름을 넣지 않는다.
 4. 폼에 연결된 Hackathon Credit Terms와 필수 동의를 본인이 읽고 제출한다. 원래 가이드 기준으로 참가자 1인당 $150이며 각자 신청해야 한다. 팀원을 대신해 신청하지 않는다.
 5. 신청 마감은 **2026-11-04 21:00 ET = 11-05 10:00 MYT**다. 지급은 배치 처리하므로 신청 직후 지급된다고 가정하지 않는다.
 6. 잘못된 정보를 제출했다면 운영 공지대로 정확한 정보로 다시 제출한다. 지급 지연을 이유로 여러 계정의 중복 혜택을 신청하지 않는다.
 
-추가 확인할 내용: 약관상 지급 자격, 실제 신청 폼, 크레딧 만료일, 사용 가능 범위, 지역/결제 제한 시 공개 가중치 모델 안내(FAQ에서 언급한 3.8항). 링크를 받으면 검토 결과를 갱신한다.
+추가 확인할 내용: 약관상 지급 자격, 크레딧 만료일, 사용 가능 범위, 지역/결제 제한 시 공개 가중치 모델 안내(FAQ에서 언급한 3.8항). 약관 전문 링크를 받으면 검토 결과를 갱신한다.
 
 ## 3. Billing과 실제 지급 확인
 

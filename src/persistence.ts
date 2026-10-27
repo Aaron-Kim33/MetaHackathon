@@ -1,7 +1,7 @@
 import * as FS from 'expo-file-system/legacy';
 import type { ProjectView, EditOptions } from './client';
 
-export type Snapshot = { view: ProjectView | null; history: EditOptions[]; projects: { id: string; createdAt: string }[]; pendingJob: string | null };
+export type Snapshot = { view: ProjectView | null; draft?: EditOptions | null; history: EditOptions[]; projects: { id: string; createdAt: string }[]; pendingJob: string | null };
 const folder = `${FS.documentDirectory}popout/`;
 let saving: Promise<void> = Promise.resolve();
 let revision = 0;

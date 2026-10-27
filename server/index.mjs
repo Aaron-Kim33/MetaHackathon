@@ -9,6 +9,7 @@ import { compose, normalisePhoto, settings, cutoutFromRaster } from './compositi
 import { Store, ModelJobs, validId } from './store.mjs';
 import { segment, generateDecoration } from './meta.mjs';
 import { fixture } from './fixture.mjs';
+import { refineMask, validateStrokes } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function localToken(directory) {
@@ -41,10 +42,11 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
   async function view(id) {
     const p = await store.get(id);
     const source = await store.read(id, 'source.png');
-    const cutout = p.selectedId ? await store.read(id, `subject-${p.selectedId}.png`) : null;
+    const cutout = p.selectedId ? await store.read(id, p.maskEdits?.[p.selectedId] || `subject-${p.selectedId}.png`) : null;
     const decoration = p.decoration ? await store.read(id, 'decoration.png') : null;
     const result = await compose({ source, cutout, decoration, options: p.options || undefined });
-    return { project: p, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), options: result.options, usage: jobs.usage() };
+    const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
+    return { project: p, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
@@ -76,6 +78,28 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         await store.save(project); send(200, await view(project.id)); return;
       }
       const project = await store.get(data.projectId);
+      if (url.pathname === '/mask' || url.pathname === '/mask/reset') {
+        insist(project.selectedId, '보정할 피사체를 먼저 선택해 주세요.');
+        if (url.pathname === '/mask') validateStrokes(data.strokes);
+        insist(Number.isSafeInteger(data.baseRevision) && data.baseRevision >= 0, '보정 버전을 확인해 주세요.');
+        await mutate(async () => {
+          const latest = await store.get(project.id);
+          insist(latest.selectedId === data.candidateId && (latest.maskRevision || 0) === data.baseRevision, '피사체가 변경됐어요. 최신 누끼를 불러온 뒤 다시 보정해 주세요.', 409);
+          latest.maskEdits ||= {};
+          if (url.pathname === '/mask/reset') delete latest.maskEdits[latest.selectedId];
+          else {
+            const source = await store.read(project.id, 'source.png');
+            const cutout = await store.read(project.id, latest.maskEdits[latest.selectedId] || `subject-${latest.selectedId}.png`);
+            const corrected = await refineMask(source, cutout, data.strokes);
+            const name = `mask-${randomUUID()}.png`;
+            await store.write(project.id, name, corrected);
+            latest.maskEdits[latest.selectedId] = name;
+          }
+          latest.maskRevision = (latest.maskRevision || 0) + 1;
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
       if (url.pathname === '/render') {
         const options = settings(data.options);
         await mutate(async () => { const latest = await store.get(project.id); latest.options = options; await store.save(latest); });

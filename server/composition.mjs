@@ -1,5 +1,6 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
+import { photoLayout } from '../src/layout.ts';
 
 export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.25, x: 0, y: -0.10, shadow: 0.3, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
 
@@ -19,14 +20,7 @@ export function settings(value = {}) {
 export function geometry(source, options) {
   const s = settings(options);
   insist(source.width > 0 && source.height > 0, '사진 크기가 올바르지 않아요.');
-  const width = 1080, height = s.ratio === 'story' ? 1920 : s.ratio === 'square' ? 1080 : 1350;
-  const screenHeight = Math.round(height * 0.59), screenWidth = Math.min(588, Math.round(screenHeight * 0.56));
-  const screen = { x: Math.round((width - screenWidth) / 2), y: Math.round(height * 0.29), width: screenWidth, height: screenHeight };
-  const scale = Math.max(screen.width / source.width, screen.height / source.height) * s.zoom;
-  const photo = { width: Math.round(source.width * scale), height: Math.round(source.height * scale) };
-  photo.x = Math.round(screen.x + (screen.width - photo.width) / 2 + s.x * screen.width);
-  photo.y = Math.round(screen.y + (screen.height - photo.height) / 2 + s.y * screen.height);
-  return { width, height, screen, photo };
+  return photoLayout(source, s);
 }
 
 const svg = (width, height, content) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${content}</svg>`);

@@ -9,6 +9,8 @@
 | server/store.mjs | 프로젝트 보관, 호출 예약·중복 방지·미확인 결과 유지 |
 | server/index.mjs | 인증된 개발 API, 사진 업로드·대상 선택·렌더링·모델 작업 |
 | App.tsx, src | 신규 최소 편집 화면, 기기 초안, 출력·공유 연결 |
+| src/GestureCanvas.tsx, src/layout.ts | 모바일 드래그/핀치·원본 비교·서버와 공유하는 좌표 계산 |
+| src/MaskEditor.tsx, server/mask.mjs | 모바일 누끼 브러시, 원본 픽셀 복원·리셋·버전 충돌 거부 |
 | server/fixture.mjs | 좌표 검사에 쓰는 직접 제작 벡터 인물과 배경 |
 | scripts | 독립 실행, 숨김 모델 키 설정, 합성 검증 그림 생성 |
 | tests | 정렬·마스크·모델 응답·비용 통제·로컬 API 검증 |

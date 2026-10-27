@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Image, LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Image, LayoutChangeEvent, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
@@ -9,6 +9,9 @@ import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
+import { GestureCanvas } from './src/GestureCanvas';
+import { MaskEditor } from './src/MaskEditor';
+import type { BrushStroke } from './src/layout';
 
 type ButtonProps = { title: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean };
 function Button({ title, onPress, disabled, secondary, selected }: ButtonProps) {
@@ -26,26 +29,37 @@ function Editor() {
   const [pendingJob, setPendingJob] = useState<string | null>(null), [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(''), [message, setMessage] = useState('사진 한 장으로, 프레임 밖으로.'), [saveState, setSaveState] = useState('');
   const [exportMessage, setExportMessage] = useState('');
+  const [interacting, setInteracting] = useState(false), [maskOpen, setMaskOpen] = useState(false);
   const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
   const [canvasWidth, setCanvasWidth] = useState(300);
   const lock = useRef(false), alive = useRef(true);
+  const latestSnapshot = useRef<Snapshot>({ view, draft, history, projects, pendingJob });
+  latestSnapshot.current = { view, draft, history, projects, pendingJob };
+  useEffect(() => {
+    if (!ready) return;
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') void persist(latestSnapshot.current).catch(() => {});
+    });
+    return () => subscription.remove();
+  }, [ready]);
   useEffect(() => {
     if (initialConnection.token) request<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage }>(initialConnection, '/status').then(setStatus).catch(() => setMessage('PC 서버에 연결하지 못했어요. 설정에서 연결을 확인해 주세요.'));
   }, []);
   useEffect(() => {
+    alive.current = true;
     restore().then(snapshot => {
       if (!alive.current) return;
-      if (snapshot) { setView(snapshot.view); setDraft(snapshot.view?.options || null); setHistory(snapshot.history || []); setProjects(snapshot.projects); setPendingJob(snapshot.pendingJob); setMessage(snapshot.pendingJob ? '미확인 AI 작업이 있어요. 상태 확인 후 계속해 주세요.' : '최근 작업을 복원했어요.'); }
+      if (snapshot) { setView(snapshot.view); setDraft(snapshot.draft || snapshot.view?.options || null); setHistory(snapshot.history || []); setProjects(snapshot.projects); setPendingJob(snapshot.pendingJob); setMessage(snapshot.pendingJob ? '미확인 AI 작업이 있어요. 상태 확인 후 계속해 주세요.' : '최근 작업을 복원했어요.'); }
     }).catch(() => setMessage('보관한 작업을 읽지 못했어요. 새 사진으로 시작할 수 있어요.')).finally(() => setReady(true));
     return () => { alive.current = false; };
   }, []);
   useEffect(() => {
     if (!ready) return;
-    const timer = setTimeout(() => { setSaveState('저장 중'); persist({ view, history, projects, pendingJob }).then(() => setSaveState('기기에 보관됨')).catch(() => setSaveState('기기 저장 실패 · 저장 공간 확인')); }, 350);
+    const timer = setTimeout(() => { setSaveState('저장 중'); persist({ view, draft, history, projects, pendingJob }).then(() => setSaveState('기기에 보관됨')).catch(() => setSaveState('기기 저장 실패 · 저장 공간 확인')); }, 350);
     return () => clearTimeout(timer);
-  }, [ready, view, history, projects, pendingJob]);
+  }, [ready, view, draft, history, projects, pendingJob]);
   const accept = (next: ProjectView) => {
     setExportMessage('');
     setView(next); setDraft(next.options); setPicking(next.project.candidates.length > 1 && !next.project.selectedId); setPoint(null);
@@ -70,10 +84,11 @@ function Editor() {
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
     if (pendingJob) { setMessage('앞선 AI 작업의 상태를 먼저 확인해 주세요.'); return; }
+    if (draft && JSON.stringify(draft) !== JSON.stringify(view.options)) { setMessage('먼저 변경 적용을 눌러 편집을 마무리해 주세요.'); return; }
     void task(label, async () => {
         const id = jobId(); setPendingJob(id);
         // Save the request ID before sending: a disconnect must not lose deduplication identity.
-        await persist({ view, history, projects, pendingJob: id });
+        await persist({ view, draft, history, projects, pendingJob: id });
         const next = await request<ProjectView>(connection, endpoint, { projectId: view.project.id, jobId: id, ...extra });
         accept(next); setPendingJob(null); setMessage(endpoint === '/decoration' ? '장식이 생성됐어요. 배경 분리를 눌러 편집 가능한 장식으로 만드세요.' : '분리를 완료했어요. 결과를 확인하고 조절해 주세요.');
     });
@@ -83,6 +98,17 @@ function Editor() {
     setHistory(current => undo ? current.slice(0, -1) : [...current.slice(-19), view.options]);
     accept(next); setMessage('미리보기와 저장 파일에 같은 편집을 적용했어요.');
   }); };
+  const correctMask = async (strokes: BrushStroke[], reset = false) => {
+    if (!view?.project.selectedId || lock.current) throw new Error('보정할 피사체를 선택해 주세요.');
+    lock.current = true; setBusy('누끼 보정을 적용하는 중');
+    try {
+      const next = await request<ProjectView>(connection, reset ? '/mask/reset' : '/mask', { projectId: view.project.id, candidateId: view.project.selectedId, baseRevision: view.project.maskRevision || 0, strokes });
+      accept(next);
+      if (draft) setDraft(draft);
+      if (!reset) setMaskOpen(false);
+      setMessage(reset ? '분리 원본으로 돌아갔어요.' : '누끼 보정을 적용했어요. 추가 AI 호출은 없어요.');
+    } finally { lock.current = false; setBusy(''); }
+  };
   const change = <K extends keyof EditOptions>(name: K, value: EditOptions[K]) => setDraft(current => current ? { ...current, [name]: value } : current);
   const dirty = !!view && !!draft && JSON.stringify(view.options) !== JSON.stringify(draft);
   const disabled = !!busy || !ready;
@@ -109,13 +135,13 @@ function Editor() {
   }); };
   const sourceHeight = view ? canvasWidth * view.project.height / view.project.width : 0;
   const onCanvasLayout = (event: LayoutChangeEvent) => setCanvasWidth(event.nativeEvent.layout.width);
-  return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+  return <SafeAreaView style={styles.safe}><StatusBar style="dark" /><ScrollView scrollEnabled={!interacting} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
     <View style={styles.top}><View><Text style={styles.eyebrow}>REEL TALK / CREATIVE STUDIO</Text><Text style={styles.brand}>밖으로, 톡.</Text></View><Pressable accessibilityRole="button" onPress={() => setShowSettings(!showSettings)}><Text style={styles.settings}>설정</Text></Pressable></View>
     <Text style={styles.subtitle}>내 사진이 프레임을 벗어나는 순간.</Text>
     {showSettings && <View style={styles.panel}><Text style={styles.panelTitle}>PC 연결</Text><Text style={styles.help}>휴대폰과 PC를 같은 Wi-Fi에 연결하세요.</Text><TextInput accessibilityLabel="PC 서버 주소" style={styles.input} value={connection.url} onChangeText={url => setConnection(current => ({ ...current, url }))} autoCapitalize="none" autoCorrect={false} editable={!disabled} /><TextInput accessibilityLabel="PC 연결 코드" placeholder="PC 연결 코드 · 모델 API 키 아님" secureTextEntry style={styles.input} value={connection.token} onChangeText={token => setConnection(current => ({ ...current, token }))} autoCapitalize="none" editable={!disabled} /><Button title="연결 확인" onPress={check} disabled={disabled} secondary />{status && <Text style={styles.help}>예약된 호출 / 설정 한도 · SAM {status.usage.sam.reserved}/{status.usage.sam.cap} · 이미지 {status.usage.image.reserved}/{status.usage.image.cap}</Text>}</View>}
     <View style={styles.row}><View style={{ flex: 1 }}><Button title={view ? '새 사진' : '사진 선택'} onPress={choosePhoto} disabled={disabled} /></View><View style={{ flex: 1 }}><Button title="연습용 그림" onPress={useFixture} secondary disabled={disabled} /></View></View>
     <View style={styles.canvas} onLayout={onCanvasLayout}>
-      {!view ? <View style={styles.empty}><Text style={styles.emptyMark}>↗</Text><Text style={styles.emptyTitle}>평범한 한 장에서{ '\n' }입체적인 한 장으로.</Text><Text style={styles.help}>사진을 선택해 시작하세요.</Text></View> : picking ? <Pressable accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onPress={event => setPoint({ x: Math.min(1, Math.max(0, event.nativeEvent.locationX / canvasWidth)), y: Math.min(1, Math.max(0, event.nativeEvent.locationY / sourceHeight)) })}><Image source={{ uri: `data:image/png;base64,${view.source}` }} style={{ width: '100%', height: sourceHeight }} resizeMode="contain" />{view.project.candidates.map(candidate => candidate.box ? <View key={candidate.id} pointerEvents="none" style={{position: 'absolute', left: candidate.box.left / view.project.width * canvasWidth, top: candidate.box.top / view.project.height * sourceHeight, width: (candidate.box.right - candidate.box.left) / view.project.width * canvasWidth, height: (candidate.box.bottom - candidate.box.top) / view.project.height * sourceHeight, borderWidth: 2, borderColor: '#7260cb'}}><Text style={{backgroundColor: '#7260cb', color: '#fff', fontSize: 11, alignSelf: 'flex-start'}}>{candidate.label}</Text></View> : null)}{point && <View pointerEvents="none" style={[styles.point, { left: point.x * canvasWidth - 12, top: point.y * sourceHeight - 12 }]} />}</Pressable> : <Image accessibilityLabel="화면 탈출 합성 미리보기" source={{ uri: `data:image/png;base64,${view.image}` }} style={{ width: '100%', aspectRatio: view.width / view.height }} resizeMode="contain" />}
+      {!view ? <View style={styles.empty}><Text style={styles.emptyMark}>↗</Text><Text style={styles.emptyTitle}>평범한 한 장에서{ '\n' }입체적인 한 장으로.</Text><Text style={styles.help}>사진을 선택해 시작하세요.</Text></View> : picking ? <Pressable accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onPress={event => setPoint({ x: Math.min(1, Math.max(0, event.nativeEvent.locationX / canvasWidth)), y: Math.min(1, Math.max(0, event.nativeEvent.locationY / sourceHeight)) })}><Image source={{ uri: `data:image/png;base64,${view.source}` }} style={{ width: '100%', height: sourceHeight }} resizeMode="contain" />{view.project.candidates.map(candidate => candidate.box ? <View key={candidate.id} pointerEvents="none" style={{position: 'absolute', left: candidate.box.left / view.project.width * canvasWidth, top: candidate.box.top / view.project.height * sourceHeight, width: (candidate.box.right - candidate.box.left) / view.project.width * canvasWidth, height: (candidate.box.bottom - candidate.box.top) / view.project.height * sourceHeight, borderWidth: 2, borderColor: '#7260cb'}}><Text style={{backgroundColor: '#7260cb', color: '#fff', fontSize: 11, alignSelf: 'flex-start'}}>{candidate.label}</Text></View> : null)}{point && <View pointerEvents="none" style={[styles.point, { left: point.x * canvasWidth - 12, top: point.y * sourceHeight - 12 }]} />}</Pressable> : <GestureCanvas view={view} options={draft || view.options} disabled={disabled} onInteracting={setInteracting} onCommit={options => { setDraft(options); render(options); }} />}
       {view?.project.provenance === 'synthetic-fixture' && <View style={styles.fixtureBadge}><Text style={styles.fixtureText}>연습용 벡터 그림 · AI 분리 아님</Text></View>}
     </View>
     <View style={styles.message}>{busy ? <ActivityIndicator color="#7260cb" /> : <Text style={styles.dot}>●</Text>}<Text accessibilityLiveRegion="polite" style={styles.messageText}>{message}</Text></View>
@@ -125,14 +151,14 @@ function Editor() {
       else setMessage(job.message || `작업 상태: ${job.status}. 자동 재호출하지 않아요.`);
     }); }} /><Button title="확인 후 새 요청 허용" disabled={disabled} secondary onPress={() => Alert.alert('새 요청 허용', '이전 호출은 이미 비용이 발생했을 수 있어요. 제공자 사용량과 작업 상태를 확인한 뒤 새 요청을 진행하세요.', [{ text: '취소' }, { text: '확인했어요', onPress: () => { setPendingJob(null); setMessage('새 요청을 허용했어요. 이전 호출 예약은 유지돼요.'); } }])} /></View>}
     {view && <>
-      <View style={styles.panel}><Text style={styles.panelTitle}>01 · 튀어나올 대상</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title={picking ? '합성 보기' : '사진에서 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={{ flex: 1 }}><Button title="SAM으로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View></View>{picking && <Text style={styles.help}>{point ? '선택한 점으로 분리합니다.' : '원본 사진에서 인물·소품을 탭하세요.'}</Text>}<TextInput accessibilityLabel="분리할 대상 설명" style={styles.input} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Text style={styles.help}>분리를 누르면 사진을 Meta에 전송하며 SAM 호출 1회를 사용해요. 점 선택을 하지 않으면 설명에 맞는 후보를 찾습니다.</Text>{view.project.candidates.length > 1 && <Text style={styles.help}>여러 후보가 있어요. 하나를 선택하세요.</Text>}<View style={styles.wrap}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</View>{!modelsAllowed && <Text style={styles.help}>설정에서 연결 확인을 눌러 Meta 사용 준비 상태를 확인하세요.</Text>}</View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>01 · 튀어나올 대상</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title={picking ? '합성 보기' : '사진에서 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={{ flex: 1 }}><Button title="SAM으로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View></View>{picking && <Text style={styles.help}>{point ? '선택한 점으로 분리합니다.' : '원본 사진에서 인물·소품을 탭하세요.'}</Text>}<TextInput accessibilityLabel="분리할 대상 설명" style={styles.input} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Text style={styles.help}>분리를 누르면 사진을 Meta에 전송하며 SAM 호출 1회를 사용해요. 점 선택을 하지 않으면 설명에 맞는 후보를 찾습니다.</Text>{view.project.candidates.length > 1 && <Text style={styles.help}>여러 후보가 있어요. 하나를 선택하세요.</Text>}<Button title="누끼 지우기 · 복원" secondary disabled={disabled || !view.subject} onPress={() => setMaskOpen(true)} /><View style={styles.wrap}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</View>{!modelsAllowed && <Text style={styles.help}>설정에서 연결 확인을 눌러 Meta 사용 준비 상태를 확인하세요.</Text>}</View>
       {draft && <View style={styles.panel}><View style={styles.sectionHeading}><Text style={styles.panelTitle}>02 · 입체감 조절</Text><Text style={styles.help}>추가 AI 호출 없음</Text></View><View style={styles.wrap}>{(['portrait', 'story', 'square'] as const).map((ratio, i) => <Button key={ratio} title={['4:5', '9:16', '1:1'][i]} secondary selected={draft.ratio === ratio} disabled={disabled} onPress={() => change('ratio', ratio)} />)}</View><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Stepper title="그림자" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} /><View style={styles.wrap}>{['#EEE8DF', '#DDE9E4', '#DFDDF1', '#F0DCD4', '#253043'].map(color => <Pressable key={color} accessibilityRole="button" accessibilityLabel={`배경 ${color}`} accessibilityState={{ selected: draft.background === color }} onPress={() => change('background', color)} disabled={disabled} style={[styles.swatch, { backgroundColor: color, borderColor: draft.background === color ? '#7260cb' : 'transparent' }]} />)}</View>{view.project.decoration && <><Text style={styles.help}>장식 위치와 앞뒤</Text><View style={styles.row}><Button title="인물 앞" secondary selected={draft.decorationDepth === 'front'} disabled={disabled} onPress={() => change('decorationDepth', 'front')} /><Button title="인물 뒤" secondary selected={draft.decorationDepth === 'back'} disabled={disabled} onPress={() => change('decorationDepth', 'back')} /></View><Stepper title="장식 좌우" value={draft.decorationX} step={0.05} min={0} max={1} disabled={disabled} onChange={value => change('decorationX', value)} /><Stepper title="장식 상하" value={draft.decorationY} step={0.05} min={0} max={1} disabled={disabled} onChange={value => change('decorationY', value)} /><Stepper title="장식 크기" value={draft.decorationScale} step={0.05} min={0.08} max={0.65} disabled={disabled} onChange={value => change('decorationScale', value)} /></>}<View style={styles.row}><View style={{ flex: 1 }}><Button title="변경 적용" disabled={disabled || !dirty} onPress={() => render(draft)} /></View><View style={{ flex: 1 }}><Button title="실행 취소" secondary disabled={disabled || history.length === 0} onPress={() => render(history[history.length - 1], true)} /></View></View>{dirty && <Text style={styles.help}>조절한 뒤 변경 적용을 눌러 미리보기를 갱신하세요.</Text>}</View>}
       <View style={styles.panel}><Text style={styles.panelTitle}>03 · 나만의 장식</Text><Text style={styles.help}>설명을 Meta에 보내 이미지를 1회 생성합니다. 배경 분리는 별도 SAM 호출 1회예요.</Text><TextInput accessibilityLabel="생성할 장식 설명" style={styles.input} value={decorationPrompt} onChangeText={setDecorationPrompt} editable={!disabled} placeholder="예: a purple crystal" maxLength={500} /><Button title="Muse Image로 장식 만들기" secondary disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration', { prompt: decorationPrompt }, 'Muse Image가 장식을 만드는 중')} />{view.project.decorationPending && <><Text style={styles.help}>생성 완료. SAM으로 배경을 분리하면 앞뒤 배치가 가능해요.</Text><Button title="생성한 장식 배경 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration/segment', {}, '장식 배경을 분리하는 중')} /></>}{view.project.decoration && <Button title="장식 숨기기" secondary disabled={disabled} onPress={() => { void task('장식을 숨기는 중', async () => { accept(await request<ProjectView>(connection, '/decoration/remove', { projectId: view.project.id })); setMessage('장식을 숨겼어요.'); }); }} />}</View>
       <View style={styles.panel}><Text style={styles.panelTitle}>완성된 한 장</Text><View style={styles.row}><View style={{ flex: 1 }}><Button title="앨범 저장" disabled={disabled || dirty} onPress={() => save()} /></View><View style={{ flex: 1 }}><Button title="공유" secondary disabled={disabled || dirty} onPress={() => save(true)} /></View></View><Text style={styles.help}>{view.width} × {view.height} PNG · {saveState}</Text><Text accessibilityLiveRegion="polite" style={styles.help}>{exportMessage || "앨범 저장은 휴대폰 사진 보관함에, 공유는 선택한 앱으로 전달합니다."}</Text></View>
     </>}
     {projects.length > 1 && <View style={styles.panel}><Text style={styles.panelTitle}>최근 작업</Text>{projects.slice(0, 5).map((project, i) => <Button key={project.id} title={`${i + 1}. ${new Date(project.createdAt).toLocaleString()}${project.id === view?.project.id ? ' · 현재' : ''}`} secondary disabled={disabled || project.id === view?.project.id} onPress={() => { void task('작업을 불러오는 중', async () => { accept(await request<ProjectView>(connection, `/projects/${project.id}`)); setHistory([]); setMessage('이전 작업을 열었어요.'); }); }} />)}</View>}
     <Text style={styles.footer}>REEL TALK · META HACKATHON 2026{ '\n' }원본의 얼굴과 포즈를 유지하는 레이어 합성</Text>
-  </ScrollView></SafeAreaView>;
+  </ScrollView>{view && <MaskEditor visible={maskOpen} view={view} onClose={() => setMaskOpen(false)} onApply={strokes => correctMask(strokes)} onReset={() => correctMask([], true)} />}</SafeAreaView>;
 }
 export default function App() { return <SafeAreaProvider><Editor /></SafeAreaProvider>; }
 

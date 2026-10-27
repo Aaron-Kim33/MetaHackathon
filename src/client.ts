@@ -10,8 +10,9 @@ export type ProjectView = {
     id: string; createdAt: string; width: number; height: number; provenance: string; selectedId: string | null;
     candidates: { id: string; label: string; provider: string; box?: { left: number; top: number; right: number; bottom: number } }[];
     decoration: boolean; decorationPending?: { prompt: string } | null;
+    maskRevision?: number;
   };
-  image: string; source: string; width: number; height: number; options: EditOptions; usage: Usage;
+  image: string; source: string; subject?: string | null; decorationImage?: { data: string; width: number; height: number } | null; width: number; height: number; options: EditOptions; usage: Usage;
 };
 export type Connection = { url: string; token: string };
 export const initialConnection: Connection = {
