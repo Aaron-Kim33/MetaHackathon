@@ -10,6 +10,8 @@ export function settings(value = {}) {
   const result = { mode: 'frame', ...DEFAULTS };
   if (Object.hasOwn(value, 'mode')) result.mode = value.mode;
   insist(['plain', 'frame', 'sticker'].includes(result.mode), '편집 모드를 확인해 주세요.');
+  result.hidePrimary = value.hidePrimary ?? false;
+  insist(typeof result.hidePrimary === 'boolean', '기본 피사체 표시 설정을 확인해 주세요.');
   result.stickerTransforms = value.stickerTransforms || [];
   insist(Array.isArray(result.stickerTransforms) && result.stickerTransforms.length <= 16, '스티커는 최대 16개까지 가능해요.');
   const ids = new Set();
@@ -53,6 +55,7 @@ async function place(bytes, rect, width, height) {
 
 export async function compose({ source, cutout, decoration, stickers = [], options }) {
   const s = settings(options), dimensions = await sharp(source).metadata();
+  if (s.hidePrimary) cutout = null;
   const g = geometry(dimensions, s), { width, height, screen: q, photo } = g;
   const screenMask = svg(width, height, `<rect x="${q.x}" y="${q.y}" width="${q.width}" height="${q.height}" rx="30" fill="white"/>`);
   const extrusion = Math.round(28 * s.depth);
@@ -60,7 +63,7 @@ export async function compose({ source, cutout, decoration, stickers = [], optio
   const photoLayer = await place(source, photo, width, height);
   const inside = await sharp(photoLayer).composite([{ input: screenMask, blend: 'dest-in' }]).png().toBuffer();
   const bezel = svg(width, height, `<rect x="${q.x - 14}" y="${q.y - 14}" width="${q.width + 28}" height="${q.height + 28}" rx="45" fill="none" stroke="#b9c7d5" stroke-opacity=".55" stroke-width="2"/><rect x="${q.x + q.width / 2 - 46}" y="${q.y + 9}" width="92" height="19" rx="10" fill="#101724"/><circle cx="${q.x + q.width / 2 + 29}" cy="${q.y + 18}" r="4" fill="#354861"/><rect x="${q.x + q.width + 16}" y="${q.y + 120}" width="5" height="58" rx="2" fill="#8b9bb0"/>`);
-  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : s.mode === 'plain' && !cutout ? [{ input: photoLayer }] : [];
+  const layers = s.mode === 'frame' ? [{ input: phone }, { input: inside }, { input: bezel }] : s.mode === 'plain' && !cutout && !s.hidePrimary ? [{ input: photoLayer }] : [];
   let adornment;
   if (decoration) {
     const m = await sharp(decoration).metadata(), dw = Math.round(width * s.decorationScale), dh = Math.round(dw * m.height / m.width);

@@ -1,11 +1,13 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
 import { frameMatrix } from './frame';
+import { DragDelete } from './drag-delete';
+import type { TrashBounds, TrashState } from './drag-delete';
 import { gesturePhoto, gestureSticker, stickerRect, photoLayout } from './layout';
 
-type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void };
+type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void; trashBounds?: TrashBounds | null; onTrashState?: (state: TrashState) => void; onDropDelete?: (id: string, options: EditOptions) => void };
 const uri = (data: string) => ({ uri: `data:image/png;base64,${data}` });
 function touchState(event: GestureResponderEvent) {
   const touches = event.nativeEvent.touches;
@@ -26,12 +28,19 @@ export function GestureCanvas(props: Props) {
   const current = useRef({ ...props, width, enabled, compare });
   current.current = { ...props, width, enabled, compare };
   const latest = useRef<EditOptions | null>(null);
+  const deletion = useRef<DragDelete | null>(null);
+  const dragTouch = useRef<ReturnType<typeof touchState> | null>(null);
+  useEffect(() => {
+    const touch = dragTouch.current;
+    if (touch && deletion.current) current.current.onTrashState?.(deletion.current.move({ x: touch.x, y: touch.y }, touch.count, props.trashBounds || null));
+  }, [props.trashBounds]);
   const base = useRef<{ touch: ReturnType<typeof touchState>; options: EditOptions; anchorX: number; anchorY: number; stickerId: string | null } | null>(null);
   const responder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => current.current.enabled && !current.current.disabled && !current.current.compare,
     onMoveShouldSetPanResponder: () => current.current.enabled && !current.current.disabled && !current.current.compare,
     onPanResponderGrant: event => {
       const touch = touchState(event);
+      dragTouch.current = touch;
       const g = photoLayout(current.current.view.project, current.current.options), units = g.width / current.current.width;
       const hit = [...(current.current.options.stickerTransforms || [])].reverse().find(transform => {
         const sticker = current.current.view.stickers?.find(item => item.id === transform.id);
@@ -40,6 +49,10 @@ export function GestureCanvas(props: Props) {
         return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height;
       });
       current.current.onSelectSticker?.(hit?.id || null);
+      const deleteId = hit?.id || (!current.current.options.hidePrimary && (current.current.view.subject || current.current.options.mode === 'plain') ? 'primary' : null);
+      current.current.trashBounds = null;
+      deletion.current = new DragDelete(deleteId, { x: touch.x, y: touch.y });
+      deletion.current.move({ x: touch.x, y: touch.y }, touch.count, current.current.trashBounds || null);
       latest.current = current.current.options;
       base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: hit?.id || null };
       current.current.onInteracting(true);
@@ -47,6 +60,9 @@ export function GestureCanvas(props: Props) {
     onPanResponderMove: event => {
       if (!base.current || !event.nativeEvent.touches.length) return;
       const touch = touchState(event), previous = base.current;
+      dragTouch.current = touch;
+      const trash = deletion.current?.move({ x: touch.x, y: touch.y }, touch.count, current.current.trashBounds || null);
+      if (trash) current.current.onTrashState?.(trash);
       if (touch.count !== previous.touch.count) {
         base.current = { touch, options: latest.current || previous.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: previous.stickerId };
         return;
@@ -65,12 +81,17 @@ export function GestureCanvas(props: Props) {
       } else options = gesturePhoto(previous.options, current.current.view.project, current.current.width, gesture);
       latest.current = options; setLive(options);
     },
-    onPanResponderRelease: () => {
+    onPanResponderRelease: event => {
       const result = latest.current;
+      const dropId = deletion.current?.release({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY }, current.current.trashBounds || null);
+      deletion.current = null;
+      dragTouch.current = null;
       base.current = null; latest.current = null; setLive(null); current.current.onInteracting(false);
+      current.current.onTrashState?.({ visible: false, over: false });
+      if (dropId && result && current.current.onDropDelete) { current.current.onDropDelete(dropId, result); return; }
       if (result && JSON.stringify(result) !== JSON.stringify(current.current.options)) current.current.onCommit(result);
     },
-    onPanResponderTerminate: () => { base.current = null; latest.current = null; setLive(null); current.current.onInteracting(false); },
+    onPanResponderTerminate: () => { deletion.current?.cancel(); deletion.current = null; dragTouch.current = null; base.current = null; latest.current = null; setLive(null); current.current.onInteracting(false); current.current.onTrashState?.({ visible: false, over: false }); },
     onPanResponderTerminationRequest: () => false,
   }), []);
   const options = live || props.options, layout = photoLayout(props.view.project, options), scale = width / layout.width;
@@ -82,7 +103,7 @@ export function GestureCanvas(props: Props) {
   const decorationWidth = layout.width * options.decorationScale;
   const decorationHeight = decoration ? decorationWidth * decoration.height / decoration.width : 0;
   const ornament = decoration ? <Image pointerEvents="none" source={uri(decoration.data)} style={{ position: 'absolute', left: (options.decorationX * layout.width - decorationWidth / 2) * scale, top: (options.decorationY * layout.height - decorationHeight / 2) * scale, width: decorationWidth * scale, height: decorationHeight * scale }} /> : null;
-  const subject = props.view.subject ? <Image pointerEvents="none" source={uri(props.view.subject)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} /> : null;
+  const subject = props.view.subject && !options.hidePrimary ? <Image pointerEvents="none" source={uri(props.view.subject)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} /> : null;
   return <View style={props.compact ? { flex: 1 } : undefined}>
     {!props.compact && <View style={styles.toolbar}>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: enabled }} disabled={props.disabled} onPress={() => setEnabled(!enabled)} style={[styles.tool, enabled && styles.active]}><Text style={[styles.label, enabled && styles.activeLabel]}>{enabled ? '터치 조절 켜짐' : '터치로 조절'}</Text></Pressable>
@@ -90,13 +111,13 @@ export function GestureCanvas(props: Props) {
     </View>}
     <View onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {options.mode === 'sticker' && !compare && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#F4F1F7' }]}>{Array.from({ length: 6 * Math.ceil(layout.height / layout.width * 6) }, (_, i) => <View key={i} style={{ width: width / 6, height: width / 6, backgroundColor: (Math.floor(i / 6) + i % 6) % 2 ? '#E0DCE7' : '#F4F1F7' }} />)}</View>}
-      {compare ? <Image pointerEvents="none" source={uri(props.view.source)} resizeMode="contain" style={StyleSheet.absoluteFill} /> : !localPreview ? <Image pointerEvents="none" source={uri(props.view.image)} style={StyleSheet.absoluteFill} resizeMode="contain" /> : options.mode === 'plain' ? <>{options.decorationDepth === 'back' && ornament}{props.view.subject ? subject : <Image pointerEvents="none" source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} />}{options.decorationDepth === 'front' && ornament}</> : options.mode === 'sticker' ? <>{options.decorationDepth === 'back' && ornament}{subject}{options.decorationDepth === 'front' && ornament}</> : <View pointerEvents="none" style={[StyleSheet.absoluteFill, { transform: [{ matrix }] }]}>
+      {compare ? <Image pointerEvents="none" source={uri(props.view.source)} resizeMode="contain" style={StyleSheet.absoluteFill} /> : !localPreview ? <Image pointerEvents="none" source={uri(props.view.image)} style={StyleSheet.absoluteFill} resizeMode="contain" /> : options.mode === 'plain' ? <>{options.decorationDepth === 'back' && ornament}{options.hidePrimary ? null : props.view.subject ? subject : <Image pointerEvents="none" source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: photo.x * scale, top: photo.y * scale, width: photo.width * scale, height: photo.height * scale }} />}{options.decorationDepth === 'front' && ornament}</> : options.mode === 'sticker' ? <>{options.decorationDepth === 'back' && ornament}{subject}{options.decorationDepth === 'front' && ornament}</> : <View pointerEvents="none" style={[StyleSheet.absoluteFill, { transform: [{ matrix }] }]}>
         <View style={{ position: 'absolute', left: (q.x - 15 + 28 * (options.depth || 0)) * scale, top: (q.y - 15 + 18 * (options.depth || 0)) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#253246' }} />
         <View pointerEvents="none" style={{ position: 'absolute', left: (q.x - 15) * scale, top: (q.y - 15) * scale, width: (q.width + 30) * scale, height: (q.height + 30) * scale, borderRadius: 46 * scale, backgroundColor: '#171e2b' }} />
         <View pointerEvents="none" style={{ position: 'absolute', left: q.x * scale, top: q.y * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><Image source={uri(props.view.photoSource || props.view.source)} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View>
         {options.decorationDepth === 'back' && ornament}
         <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, width, height: (q.y + q.height - 40) * scale, overflow: 'hidden' }}>{subject}</View>
-        {props.view.subject && <View pointerEvents="none" style={{ position: 'absolute', left: q.x * scale, top: (q.y + q.height - 40) * scale, width: q.width * scale, height: 40 * scale, overflow: 'hidden' }}><View style={{ position: 'absolute', top: -(q.height - 40) * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><Image source={uri(props.view.subject)} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View></View>}
+        {props.view.subject && !options.hidePrimary && <View pointerEvents="none" style={{ position: 'absolute', left: q.x * scale, top: (q.y + q.height - 40) * scale, width: q.width * scale, height: 40 * scale, overflow: 'hidden' }}><View style={{ position: 'absolute', top: -(q.height - 40) * scale, width: q.width * scale, height: q.height * scale, borderRadius: 30 * scale, overflow: 'hidden' }}><Image source={uri(props.view.subject)} style={{ position: 'absolute', left: (photo.x - q.x) * scale, top: (photo.y - q.y) * scale, width: photo.width * scale, height: photo.height * scale }} /></View></View>}
         {options.decorationDepth === 'front' && ornament}
       </View>}
       {!compare && (options.stickerTransforms || []).map(transform => {

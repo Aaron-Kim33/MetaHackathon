@@ -110,11 +110,13 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         send(200, result); return;
       }
       if (url.pathname === '/stickers/remove') {
+        const updatedOptions = data.options ? settings(data.options) : null;
         await mutate(async () => {
           const latest = await store.get(project.id);
           insist((latest.stickers || []).some(item => item.id === data.stickerId), '스티커를 찾지 못했어요.');
           latest.stickers = latest.stickers.filter(item => item.id !== data.stickerId);
-          latest.options = settings(latest.options || undefined);
+          latest.options = updatedOptions || settings(latest.options || undefined);
+          insist(latest.options.stickerTransforms.every(t => t.id === data.stickerId || latest.stickers.some(item => item.id === t.id)), '스티커 목록이 변경됐어요.', 409);
           latest.options.stickerTransforms = latest.options.stickerTransforms.filter(item => item.id !== data.stickerId);
           await store.save(latest);
         });
@@ -143,6 +145,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           latest.selectedId = id;
           latest.maskRevision = (latest.maskRevision || 0) + 1;
           latest.options = settings(latest.options || undefined);
+          latest.options.hidePrimary = false;
           await store.save(latest);
         });
         send(200, await view(project.id)); return;
@@ -177,6 +180,8 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
             latest.maskEdits[latest.selectedId] = name;
           }
           latest.maskRevision = (latest.maskRevision || 0) + 1;
+          latest.options = settings(latest.options || undefined);
+          latest.options.hidePrimary = false;
           await store.save(latest);
         });
         send(200, await view(project.id)); return;
@@ -196,7 +201,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       }
       if (url.pathname === '/select') {
         insist(project.candidates.some(c => c.id === data.candidateId), '피사체 후보를 다시 선택해 주세요.');
-        await mutate(async () => { const latest = await store.get(project.id); latest.selectedId = data.candidateId; await store.save(latest); });
+        await mutate(async () => { const latest = await store.get(project.id); latest.selectedId = data.candidateId; latest.options = settings(latest.options || undefined); latest.options.hidePrimary = false; await store.save(latest); });
         send(200, await view(project.id)); return;
       }
       if (url.pathname === '/decoration/remove') {
@@ -252,7 +257,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
             await store.save(latest); return;
           }
           if (isDecoration) { latest.decoration = true; latest.decorationProvenance = { image: latest.decorationPending, segmentation: { model: result.model, requestId: result.requestId } }; latest.decorationPending = null; }
-          else { latest.candidates = candidates; latest.selectedId = candidates.length === 1 ? candidates[0].id : null; }
+          else { latest.candidates = candidates; latest.selectedId = candidates.length === 1 ? candidates[0].id : null; latest.options = settings(latest.options || undefined); latest.options.hidePrimary = false; }
           await store.save(latest);
         });
         return { projectId: project.id, requestId: result.requestId };

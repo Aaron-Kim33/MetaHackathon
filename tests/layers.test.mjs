@@ -60,9 +60,9 @@ test('two imported cutouts accumulate, move independently, preserve order, and s
   assert.deepEqual(reopened.options.stickerTransforms, moved.options.stickerTransforms);
   const reordered = await post('/render', { projectId, options: { ...moved.options, stickerTransforms: [...moved.options.stickerTransforms].reverse() } });
   assert.equal(reordered.options.stickerTransforms.at(-1).id, red.id);
-  const removed = await post('/stickers/remove', { projectId, stickerId: red.id });
+  const removed = await post('/stickers/remove', { projectId, stickerId: red.id, options: { ...reordered.options, stickerTransforms: reordered.options.stickerTransforms.map(item => item.id === blue.id ? { ...item, x: 0.85 } : item) } });
   assert.equal(removed.stickers.length, 1); assert.equal(removed.stickers[0].data, blue.data);
-  assert.deepEqual(removed.options.stickerTransforms, [transforms[1]]);
+  assert.deepEqual(removed.options.stickerTransforms, [{ ...transforms[1], x: 0.85 }]);
   assert.equal(removed.usage.sam.reserved, 0); assert.equal(removed.usage.image.reserved, 0);
 });
 

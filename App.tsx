@@ -9,6 +9,8 @@ import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
+import { DragTrash } from './src/DragTrash';
+import type { TrashBounds, TrashState } from './src/drag-delete';
 import { GestureCanvas } from './src/GestureCanvas';
 import { MaskEditor } from './src/MaskEditor';
 import { SourcePicker } from './src/SourcePicker';
@@ -50,6 +52,8 @@ function Editor() {
   const [pendingJob, setPendingJob] = useState<string | null>(null), [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(''), [message, setMessage] = useState('사진을 열어 AI 편집을 시작하세요.'), [saveState, setSaveState] = useState('');
   const [exportMessage, setExportMessage] = useState('');
+  const [trashState, setTrashState] = useState<TrashState>({ visible: false, over: false });
+  const [trashBounds, setTrashBounds] = useState<TrashBounds | null>(null);
   const [interacting, setInteracting] = useState(false), [maskOpen, setMaskOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
@@ -149,7 +153,7 @@ function Editor() {
     try {
       const next = await request<ProjectView>(connection, reset ? '/mask/reset' : '/mask', { projectId: view.project.id, candidateId: view.project.selectedId, stickerId: maskStickerId, baseRevision: (maskTarget || view).project.maskRevision || 0, strokes });
       accept(next);
-      if (draft) setDraft(draft);
+      if (draft) setDraft({ ...draft, hidePrimary: next.options.hidePrimary });
       if (!reset) setMaskOpen(false); else if (maskStickerId) setMaskTarget(await request<ProjectView>(connection, '/stickers/edit', { projectId: view.project.id, stickerId: maskStickerId })); else setMaskTarget(next);
       setMessage(reset ? '누끼 보정을 초기화했어요.' : '누끼 보정을 적용했어요. 추가 AI 호출은 없어요.');
     } finally { lock.current = false; setBusy(''); }
@@ -229,6 +233,14 @@ function Editor() {
   const controlsDisabled = disabled || interacting || maskOpen;
   const activeTransform = draft?.stickerTransforms?.find(item => item.id === activeStickerId);
   const changeSticker = (name: 'x' | 'y' | 'scale', value: number) => setDraft(current => current ? { ...current, stickerTransforms: current.stickerTransforms.map(item => item.id === activeStickerId ? { ...item, [name]: value } : item) } : current);
+  const dropDelete = (id: string, options: EditOptions) => {
+    if (!view) return;
+    if (id === 'primary') { render({ ...options, hidePrimary: true }); return; }
+    void task('스티커를 삭제하는 중', async () => {
+      const next = await request<ProjectView>(connection, '/stickers/remove', { projectId: view.project.id, stickerId: id, options });
+      accept(next); setActiveStickerId(null); setHistory([]); setMessage('휴지통에 놓은 스티커를 삭제했어요.');
+    });
+  };
   const removeSticker = () => { if (!view || !activeStickerId) return; void task('스티커를 삭제하는 중', async () => { if (draft && dirty) await request(connection, '/render', { projectId: view.project.id, options: draft }); accept(await request<ProjectView>(connection, '/stickers/remove', { projectId: view.project.id, stickerId: activeStickerId })); setActiveStickerId(null); setHistory([]); setMessage('선택한 스티커만 삭제했어요.'); }); };
   const bringStickerForward = () => { if (!draft || !activeTransform) return; const next = { ...draft, stickerTransforms: [...draft.stickerTransforms.filter(item => item.id !== activeStickerId), activeTransform] }; setDraft(next); render(next); };
   const layerPicker = view?.stickers?.length ? <>
@@ -248,13 +260,14 @@ function Editor() {
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
       <View style={[styles.canvasArea, { paddingRight: canvasSize.railWidth + 10 }]}>
         {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} viewportHeight={Math.max(32, stage.height - 20)} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
-          {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={setInteracting} onCommit={options => { setDraft(options); render(options); }} />}
+          {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => { setDraft(options); render(options); }} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
           {stage.height > 320 && <Text style={styles.emptyMark}>↗</Text>}
           {stage.height > 180 && <><Text style={styles.emptyTitle}>사진 한 장,{ '\n' }내 스타일로.</Text>{stage.height > 280 && <Text style={styles.emptyHint}>AI 피사체 분리 · 장식 · 테마 편집</Text>}<Button title="사진 선택" disabled={disabled} onPress={choosePhoto} /><Pressable accessibilityRole="button" onPress={useFixture} disabled={disabled} style={styles.sampleLink}><Text style={styles.sampleText}>연습용 그림으로 시작</Text></Pressable></>}
         </View>}
       </View>
+      {trashState.visible && !maskOpen && <DragTrash over={trashState.over} right={canvasSize.railWidth + 10} onBounds={setTrashBounds} />}
       {screen.showRail && <View style={styles.railPosition}><ToolRail active={maskOpen ? 'subject' : activeTool} onSelect={selectTool} disabled={controlsDisabled} hasPhoto={!!view} buttonHeight={screen.railButtonHeight} pendingJob={!!pendingJob} /></View>}
     </View>
 

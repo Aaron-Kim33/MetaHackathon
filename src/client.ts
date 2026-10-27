@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
 export type EditOptions = {
+  hidePrimary: boolean;
   tilt: number; depth: number;
   stickerTransforms: import('./layout').StickerTransform[];
   mode: 'plain' | 'frame' | 'sticker';
