@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 import { createApp } from '../server/index.mjs';
 
 test('local workflow authenticates, persists project edits and renders without model access', async t => {
@@ -22,4 +24,53 @@ test('local workflow authenticates, persists project edits and renders without m
   assert.equal(app.jobs.usage().sam.reserved, 0);
   const restored = await (await request(`/projects/${initial.project.id}`)).json();
   assert.equal(restored.image, updated.image); assert.equal(restored.project.selectedId, initial.project.selectedId);
+});
+
+test('paid endpoints stay blocked until the user confirms the credit grant', async t => {
+  await mkdir('.local/tests', { recursive: true });
+  const root = await mkdtemp(path.resolve('.local/tests/credit-gate-'));
+  let calls = 0;
+  const app = await createApp({ root, token: 'test-pairing', key: 'test-only', creditsConfirmed: false, caps: { sam: 3, image: 1 }, fetcher: async () => { calls++; throw Error('must not call'); } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.server.close(resolve)));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const request = (route, value) => fetch(base + route, { method: value === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer test-pairing', 'Content-Type': 'application/json' }, body: value === undefined ? undefined : JSON.stringify(value) });
+  const status = await (await request('/status')).json();
+  assert.equal(status.modelConfigured, true); assert.equal(status.creditsConfirmed, false);
+  const project = await (await request('/fixture', {})).json();
+  const result = await request('/segment', { projectId: project.project.id, jobId: randomUUID(), prompt: 'person' });
+  assert.equal(result.status, 403); assert.equal(calls, 0); assert.equal(app.jobs.usage().sam.reserved, 0);
+});
+
+test('complete mocked SAM and Muse decoration workflow shares the durable request caps', async t => {
+  await mkdir('.local/tests', { recursive: true });
+  const root = await mkdtemp(path.resolve('.local/tests/model-flow-'));
+  const image = await sharp({ create: { width: 320, height: 334, channels: 3, background: '#b39cde' } }).png().toBuffer();
+  const wire = '<0f>0<|box;x1=211;y1=228;x2=270;y2=254;w=320;h=334|><|mask;x=0;y=0;data=27,60,~!!!!M!0c[0o91w?q1!pIH4pPRVp2B3\'7`e.ioeAf6-k/#Xd8%dX9x(|>';
+  const calls = [];
+  const app = await createApp({ root, token: 'test-pairing', key: 'test-only', creditsConfirmed: true, caps: { sam: 2, image: 1 }, fetcher: async (url, init) => {
+    const request = JSON.parse(init.body); calls.push(request.model);
+    return Response.json({ id: `mock_${calls.length}`, status: 'completed', output: request.model === 'sam-3.1' ? [{ type: 'message', content: [{ type: 'output_text', text: wire }] }] : [{ type: 'image_generation_call', result: image.toString('base64') }] });
+  } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.server.close(resolve)));
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  const request = (route, value) => fetch(base + route, { method: 'POST', headers: { Authorization: 'Bearer test-pairing', 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const uploaded = await (await request('/projects', { image: image.toString('base64') })).json();
+  const projectId = uploaded.project.id, samJob = randomUUID();
+  const segmented = await (await request('/segment', { projectId, jobId: samJob, prompt: 'person' })).json();
+  assert.equal(segmented.project.candidates[0].provider, 'sam-3.1');
+  assert.ok(segmented.project.selectedId);
+  assert.equal((await request('/segment', { projectId, jobId: samJob, prompt: 'person' })).status, 200);
+  assert.equal(calls.length, 1);
+  const generated = await (await request('/decoration', { projectId, jobId: randomUUID(), prompt: 'a purple crystal' })).json();
+  assert.ok(generated.project.decorationPending);
+  assert.equal(generated.project.decoration, false);
+  const final = await (await request('/decoration/segment', { projectId, jobId: randomUUID() })).json();
+  assert.equal(final.project.decoration, true);
+  assert.equal(final.project.decorationPending, null);
+  assert.equal(final.project.decorationProvenance.image.model, 'muse-image-1.0');
+  assert.equal(final.usage.sam.reserved, 2); assert.equal(final.usage.image.reserved, 1);
+  assert.equal((await request('/segment', { projectId, jobId: randomUUID(), prompt: 'person' })).status, 429);
+  assert.deepEqual(calls, ['sam-3.1', 'muse-image-1.0', 'sam-3.1']);
 });

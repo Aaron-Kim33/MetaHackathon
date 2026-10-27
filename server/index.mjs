@@ -31,7 +31,7 @@ async function body(req) {
 const encoded = bytes => bytes.toString('base64');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher } = {}) {
+export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher } = {}) {
   const pairing = token || process.env.POPOUT_TOKEN || await localToken(root);
   insist(Object.values(caps).every(n => Number.isSafeInteger(n) && n >= 0), '호출 한도는 0 이상의 정수여야 해요.');
   const store = new Store(root), jobs = new ModelJobs(path.join(root, 'model-jobs.json'), caps);
@@ -54,7 +54,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       const supplied = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''));
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
-      if (req.method === 'GET' && url.pathname === '/status') { send(200, { modelConfigured: !!key?.trim(), usage: jobs.usage() }); return; }
+      if (req.method === 'GET' && url.pathname === '/status') { send(200, { modelConfigured: !!key?.trim(), creditsConfirmed, usage: jobs.usage() }); return; }
       if (req.method === 'GET' && url.pathname.startsWith('/jobs/')) {
         const id = url.pathname.split('/').at(-1); insist(validId(id), '작업 ID가 올바르지 않아요.');
         const job = jobs.jobs[id]; insist(job, '작업 기록을 찾지 못했어요.', 404); send(200, job); return;
@@ -92,6 +92,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       }
       insist(['/segment', '/decoration', '/decoration/segment'].includes(url.pathname), '지원하지 않는 요청이에요.', 404);
       insist(key?.trim(), 'Meta Model API 키가 아직 없어요. PC에서 npm run setup:model을 실행해 주세요.', 503);
+      insist(creditsConfirmed, 'Billing의 대회 크레딧 지급을 확인한 뒤 PC에서 모델 설정을 완료해 주세요.', 403);
       // Validate before reserving any potential paid call.
       if (url.pathname === '/decoration' || (!data.point && url.pathname === '/segment')) insist(typeof data.prompt === 'string' && data.prompt.trim() && data.prompt.length <= 500, '대상을 500자 이내로 설명해 주세요.');
       if (data.point) insist(Number.isFinite(data.point.x) && Number.isFinite(data.point.y) && data.point.x >= 0 && data.point.x <= 1 && data.point.y >= 0 && data.point.y <= 1, '사진 안에서 대상을 선택해 주세요.');

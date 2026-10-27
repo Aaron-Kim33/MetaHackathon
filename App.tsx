@@ -26,13 +26,13 @@ function Editor() {
   const [pendingJob, setPendingJob] = useState<string | null>(null), [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(''), [message, setMessage] = useState('사진 한 장으로, 프레임 밖으로.'), [saveState, setSaveState] = useState('');
   const [exportMessage, setExportMessage] = useState('');
-  const [status, setStatus] = useState<{ modelConfigured: boolean; usage: Usage } | null>(null);
+  const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
   const [canvasWidth, setCanvasWidth] = useState(300);
   const lock = useRef(false), alive = useRef(true);
   useEffect(() => {
-    if (initialConnection.token) request<{ modelConfigured: boolean; usage: Usage }>(initialConnection, '/status').then(setStatus).catch(() => setMessage('PC 서버에 연결하지 못했어요. 설정에서 연결을 확인해 주세요.'));
+    if (initialConnection.token) request<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage }>(initialConnection, '/status').then(setStatus).catch(() => setMessage('PC 서버에 연결하지 못했어요. 설정에서 연결을 확인해 주세요.'));
   }, []);
   useEffect(() => {
     restore().then(snapshot => {
@@ -66,7 +66,7 @@ function Editor() {
     const image = await FS.readAsStringAsync(asset.uri, { encoding: FS.EncodingType.Base64 });
     accept(await request<ProjectView>(connection, '/projects', { image })); setHistory([]); setMessage('사진을 불러왔어요. 튀어나올 대상을 선택해 주세요.');
   }); };
-  const modelsAllowed = !!status?.modelConfigured;
+  const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
     if (pendingJob) { setMessage('앞선 AI 작업의 상태를 먼저 확인해 주세요.'); return; }
@@ -87,7 +87,7 @@ function Editor() {
   const dirty = !!view && !!draft && JSON.stringify(view.options) !== JSON.stringify(draft);
   const disabled = !!busy || !ready;
   const useFixture = () => { void task('연습용 그림을 여는 중', async () => { accept(await request<ProjectView>(connection, '/fixture', {})); setHistory([]); setMessage('직접 그린 테스트 그림이에요. 실제 SAM 결과가 아닙니다.'); }); };
-  const check = () => { void task('PC 연결을 확인하는 중', async () => { const next = await request<{ modelConfigured: boolean; usage: Usage }>(connection, '/status'); setStatus(next); setMessage(next.modelConfigured ? 'Meta 키 설정을 확인했어요. 실제 호출 권한·잔액은 별도 확인이 필요해요.' : 'PC 연결 완료. Meta 키는 아직 설정되지 않았어요. 연습용 그림은 사용할 수 있어요.'); }); };
+  const check = () => { void task('PC 연결을 확인하는 중', async () => { const next = await request<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage }>(connection, '/status'); setStatus(next); setMessage(!next.modelConfigured ? 'PC 연결 완료. Meta 키는 아직 설정되지 않았어요.' : !next.creditsConfirmed ? '키 설정은 있어요. PC에서 Billing의 대회 크레딧 지급 확인을 완료해 주세요.' : '키 설정과 크레딧 수동 확인 기록이 있어요. 실제 잔액과 모델 호출 성공은 별도 확인이 필요해요.'); }); };
   const save = (share = false) => { if (!view) return; void task(share ? '공유 파일을 준비하는 중' : '사진을 저장하는 중', async () => {
     setExportMessage(share ? '공유 파일을 준비하고 있어요.' : '휴대폰 사진 보관함에 저장하고 있어요.');
     try {

@@ -9,6 +9,7 @@
     "reload": "node scripts/reload.mjs",
     "api": "node --env-file-if-exists=.env server/index.mjs",
     "setup:model": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-model.ps1",
+    "check:model": "node scripts/check-model.mjs",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "fixture": "node scripts/fixture.mjs"
