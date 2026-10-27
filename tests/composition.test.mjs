@@ -4,6 +4,34 @@ import sharp from 'sharp';
 import { compose, geometry, cutoutFromRaster, normalisePhoto } from '../server/composition.mjs';
 import { fixture } from '../server/fixture.mjs';
 
+test('plain editor renders a photo or isolated subject without a phone frame', async () => {
+  const source = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#ff0000' } }).png().toBuffer();
+  const { contourCutout } = await import('../server/mask.mjs');
+  const cutout = await contourCutout(source, [{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.4 }, { x: 0.6, y: 0.6 }, { x: 0.4, y: 0.6 }]);
+  const options = { mode: 'plain', zoom: 1, x: 0, y: 0, background: '#ffffff' };
+  const full = await compose({ source, options });
+  const isolated = await compose({ source, cutout, options });
+  const a = await sharp(full.bytes).raw().toBuffer(), b = await sharp(isolated.bytes).raw().toBuffer();
+  const g = geometry({ width: 100, height: 100 }, options);
+  const offset = ((g.photo.y + Math.round(g.photo.height * 0.25)) * full.width + g.photo.x + Math.round(g.photo.width * 0.25)) * 4;
+  assert.deepEqual([...a.subarray(offset, offset + 4)], [255, 0, 0, 255]);
+  assert.deepEqual([...b.subarray(offset, offset + 4)], [255, 255, 255, 255]);
+});
+
+test('phone pop-out remains a theme whose subject visibly escapes above the phone', async () => {
+  const sample = await fixture(), options = { mode: 'frame', zoom: 1.8, y: -0.25, shadow: 0 };
+  const base = await compose({ source: sample.bytes, options });
+  const result = await compose({ source: sample.bytes, cutout: sample.cutout, options });
+  const a = await sharp(base.bytes).raw().toBuffer(), b = await sharp(result.bytes).raw().toBuffer();
+  const g = geometry(sample, { ...base.options, ...options });
+  let changed = 0;
+  for (let y = 0; y < g.screen.y - 18; y++) for (let x = 0; x < g.width; x++) {
+    const offset = (y * g.width + x) * 4;
+    if (Math.abs(a[offset] - b[offset]) + Math.abs(a[offset + 1] - b[offset + 1]) + Math.abs(a[offset + 2] - b[offset + 2]) > 20) changed++;
+  }
+  assert.ok(changed > 1000, 'foreground must escape above the frame');
+});
+
 test('sticker mode has transparent output and moving it leaves no original copy behind', async () => {
   const source = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#ff0000' } }).png().toBuffer();
   const { contourCutout } = await import('../server/mask.mjs');

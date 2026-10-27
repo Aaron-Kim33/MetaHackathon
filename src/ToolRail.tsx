@@ -7,7 +7,7 @@ export const EDITOR_TOOLS: { id: ToolId; icon: string; label: string }[] = [
   { id: 'subject', icon: '◎', label: '피사체' },
   { id: 'position', icon: '↔', label: '위치' },
   { id: 'decoration', icon: '✧', label: '장식' },
-  { id: 'background', icon: '◐', label: '배경' },
+  { id: 'background', icon: '◐', label: '테마' },
   { id: 'more', icon: '···', label: '더보기' },
 ];
 type Props = { active: ToolId | null; onSelect: (id: ToolId) => void; disabled: boolean; hasPhoto: boolean; buttonHeight: number; pendingJob: boolean };

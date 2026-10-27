@@ -104,10 +104,18 @@ test('mask correction is durable, rejects stale edits and resets without any mod
   assert.equal(reset.project.maskRevision, 2);
   assert.equal(app.jobs.usage().sam.reserved, 0);
   const cut = await (await request('/cutout', { projectId: initial.project.id, points: [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2 }, { x: 0.8, y: 0.8 }, { x: 0.2, y: 0.8 }] })).json();
-  assert.equal(cut.options.mode, 'sticker');
+  assert.equal(cut.options.mode, reset.options.mode, 'cutting must preserve the current theme');
   assert.equal(cut.project.candidates.at(-1).provider, 'manual-contour');
-  const movedSticker = await (await request('/render', { projectId: cut.project.id, options: { ...cut.options, x: 0.1, zoom: 1.2 } })).json();
+  const movedSticker = await (await request('/render', { projectId: cut.project.id, options: { ...cut.options, mode: 'sticker', x: 0.1, zoom: 1.2 } })).json();
   assert.equal(movedSticker.subject, cut.subject);
   assert.equal(movedSticker.options.mode, 'sticker');
   assert.deepEqual(movedSticker.usage, cut.usage);
+  const points = [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2 }, { x: 0.8, y: 0.8 }, { x: 0.2, y: 0.8 }];
+  for (const mode of ['plain', 'frame', 'sticker']) {
+    const themed = await (await request('/render', { projectId: cut.project.id, options: { ...cut.options, mode, x: 0.12, zoom: 1.3 } })).json();
+    const recut = await (await request('/cutout', { projectId: cut.project.id, points })).json();
+    assert.deepEqual(recut.options, themed.options, `manual cut must not change ${mode} or its placement`);
+  }
+  const fresh = await (await request('/projects', { image: initial.source })).json();
+  assert.equal(fresh.options.mode, 'plain', 'new photos start in the general editor');
 });

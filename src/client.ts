@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 
 export type EditOptions = {
-  mode: 'frame' | 'sticker';
+  mode: 'plain' | 'frame' | 'sticker';
   ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number; shadow: number; background: string;
   decorationDepth: 'front' | 'back'; decorationX: number; decorationY: number; decorationScale: number;
 };

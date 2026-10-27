@@ -89,7 +89,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           latest.candidates.push({ id, label: '직접 자른 스티커', provider: 'manual-contour' });
           latest.selectedId = id;
           latest.maskRevision = (latest.maskRevision || 0) + 1;
-          latest.options = settings({ ...latest.options, mode: 'sticker', zoom: 1, x: 0, y: 0 });
+          latest.options = settings(latest.options || undefined);
           await store.save(latest);
         });
         send(200, await view(project.id)); return;

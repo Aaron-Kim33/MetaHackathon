@@ -14,7 +14,7 @@ export class Store {
   constructor(root) { this.root = root; }
   directory(id) { insist(validId(id), '프로젝트 ID가 올바르지 않아요.'); return path.join(this.root, 'projects', id); }
   async create(photo, provenance = 'user') {
-    const project = { id: randomUUID(), createdAt: new Date().toISOString(), width: photo.width, height: photo.height, provenance, candidates: [], selectedId: null, decoration: false, options: null };
+    const project = { id: randomUUID(), createdAt: new Date().toISOString(), width: photo.width, height: photo.height, provenance, candidates: [], selectedId: null, decoration: false, options: provenance === 'user' ? { mode: 'plain', zoom: 1, x: 0, y: 0 } : null };
     await mkdir(this.directory(project.id), { recursive: true });
     await writeFile(path.join(this.directory(project.id), 'source.png'), photo.bytes);
     await this.save(project);

@@ -71,7 +71,7 @@ export function MaskEditor(props: Props) {
     <View style={styles.header}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{outline ? '테두리로 자르기' : '지우개 보정'}</Text>{tool('닫기', false, props.onClose)}</View>
     <View style={[styles.row, { gap: 6 }]}>{outline ? <Text style={{ color: '#ddd', fontSize: 11, flex: 1 }}>남길 부분을 한 바퀴 그려 주세요. 끝점은 자동으로 이어져요.</Text> : sizes}{tool('↶', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
     {drawingCanvas}
-    <View style={[styles.row, { gap: 6 }]}>{tool(busy ? '적용 중…' : outline ? '스티커로 자르기' : '보정 적용', true, () => { void action(false); }, !strokes.length || (outline && strokes[0].points.length < 3))}{!outline && tool('지우개 보정 초기화', false, () => { void action(true); })}</View>
+    <View style={[styles.row, { gap: 6 }]}>{tool(busy ? '적용 중…' : outline ? '자르기 적용' : '보정 적용', true, () => { void action(false); }, !strokes.length || (outline && strokes[0].points.length < 3))}{!outline && tool('지우개 보정 초기화', false, () => { void action(true); })}</View>
     {error ? <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.error, { color: '#FFB9C1', position: 'absolute', left: 6, right: 6, top: 78, backgroundColor: '#45232A', padding: 8 }]}>{error}</Text> : null}
   </View>;
   return <Modal visible={props.visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!busy) props.onClose(); }}><SafeAreaView style={styles.safe}><ScrollView scrollEnabled={!drawing} contentContainerStyle={styles.page}>
