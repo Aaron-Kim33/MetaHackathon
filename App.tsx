@@ -121,18 +121,33 @@ function Editor() {
     try { await previewFlight.current; await action(); } catch (error) { setMessage(error instanceof Error ? error.message : '작업을 완료하지 못했어요.'); }
     finally { setBusy(''); lock.current = false; }
   };
-  const choosePhoto = () => { void task('사진을 불러오는 중', async () => {
+  const pickPhotoData = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
-    if (result.canceled) { setMessage('사진 선택을 취소했어요.'); return; }
+    if (result.canceled) return null;
     const asset = result.assets[0];
     if (asset.fileSize && asset.fileSize > 12000000) throw new Error('12MB 이하의 사진을 선택해 주세요.');
-    const image = await FS.readAsStringAsync(asset.uri, { encoding: FS.EncodingType.Base64 });
+    return FS.readAsStringAsync(asset.uri, { encoding: FS.EncodingType.Base64 });
+  };
+  const choosePhoto = () => { void task('사진을 불러오는 중', async () => {
+    const image = await pickPhotoData();
+    if (!image) { setMessage('사진 선택을 취소했어요.'); return; }
     if (view) {
       await savePendingOptions();
       const next = await request<ProjectView>(connection, '/imports', { projectId: view.project.id, image });
       accept(next); openImported(next); setMessage('기존 작업은 유지돼요. 추가 사진에서 새 스티커를 잘라 주세요.');
     } else { accept(await request<ProjectView>(connection, '/projects', { image })); setHistory([]); setActiveStickerId('primary'); setMessage('사진을 불러왔어요. 피사체 분리·장식·테마로 편집해 보세요.'); }
   }); };
+  const replaceMainPhoto = () => {
+    if (!view || pendingJob) return;
+    void task('메인 사진을 변경하는 중', async () => {
+      const image = await pickPhotoData();
+      if (!image) { setMessage('메인 사진 변경을 취소했어요.'); return; }
+      await savePendingOptions();
+      const next = await request<ProjectView>(connection, '/source/replace', { projectId: view.project.id, image });
+      accept(next); setHistory([]); setActiveStickerId('primary'); setPicking(false);
+      setMessage(next.options.mode === 'frame' ? '메인 사진을 바꿨어요. 새 사진의 피사체를 분리하면 팝아웃에 적용돼요. 기존 스티커는 유지했어요.' : '메인 사진을 바꿨어요. 기존 스티커와 배치는 유지했어요.');
+    });
+  };
   const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
@@ -292,7 +307,7 @@ function Editor() {
   </> : null;
   const openJobTools = () => { if (maskOpen) return; setMoreTab('jobs'); setActiveTool('more'); };
   return <SafeAreaView style={styles.safe}><StatusBar style="light" /><KeyboardAvoidingView style={styles.editor} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={insets.top}><View style={styles.editor} onLayout={event => setRootHeight(event.nativeEvent.layout.height)}>
-    <View style={styles.top}>
+    <View style={[styles.top, maskOpen && { display: 'none' }]}>
       <View><Text style={styles.brand}>reel talk<Text style={styles.brandDot}> ✳</Text></Text><Pressable accessibilityRole="button" accessibilityLabel="현재 테마 선택" disabled={!view || controlsDisabled} onPress={() => { setThemeTab('theme'); setActiveTool('background'); }}><Text style={styles.eyebrow}>{view ? themeName(draft?.mode) + ' ▾' : 'AI PHOTO EDITOR'}</Text></Pressable></View>
       <View style={styles.row}>
         <Pressable accessibilityRole="button" accessibilityLabel="화면 밖 요소 되찾기" disabled={controlsDisabled || !view || !draft} onPress={() => { if (view && draft) { render(recoverScene(draft, view)); setMessage('화면 밖 요소를 다시 가져왔어요.'); } }} style={styles.topIcon}><Text style={styles.topIconText}>⌖</Text></Pressable>
@@ -302,8 +317,8 @@ function Editor() {
     </View>
 
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
-      <View style={[styles.canvasArea, maskOpen && { paddingTop: 64, paddingBottom: 64, paddingHorizontal: 12 }]}>
-        {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} viewportHeight={Math.max(32, stage.height - 20)} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
+      <View style={[styles.canvasArea, maskOpen && { paddingTop: 12, paddingBottom: 12, paddingHorizontal: 12 }]}>
+        {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
           {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
@@ -311,8 +326,9 @@ function Editor() {
           {stage.height > 180 && <><Text style={styles.emptyTitle}>사진 한 장,{ '\n' }내 스타일로.</Text>{stage.height > 280 && <Text style={styles.emptyHint}>AI 피사체 분리 · 장식 · 테마 편집</Text>}<Button title="사진 선택" disabled={disabled} onPress={choosePhoto} /><Pressable accessibilityRole="button" onPress={useFixture} disabled={disabled} style={styles.sampleLink}><Text style={styles.sampleText}>연습용 그림으로 시작</Text></Pressable></>}
         </View>}
       </View>
+      {view && draft?.mode === 'frame' && !maskOpen && !interacting && <Pressable accessibilityRole="button" accessibilityLabel="폰 팝아웃 메인 사진 변경" disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} style={{ position: 'absolute', left: 12, top: 72, zIndex: 70, backgroundColor: '#302D38DD', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, opacity: disabled || pendingJob ? 0.35 : 1 }}><Text style={{ color: '#fff', fontSize: 11 }}>메인 사진 변경</Text></Pressable>}
       {trashState.visible && !maskOpen && <DragTrash over={trashState.over} right={canvasSize.railWidth + 10} onBounds={setTrashBounds} />}
-      {screen.showRail && <View style={styles.railPosition}><ToolRail active={maskOpen ? 'subject' : activeTool} onSelect={selectTool} disabled={controlsDisabled} hasPhoto={!!view} buttonHeight={screen.railButtonHeight} pendingJob={!!pendingJob} /></View>}
+      {screen.showRail && !maskOpen && <View style={styles.railPosition}><ToolRail active={maskOpen ? 'subject' : activeTool} onSelect={selectTool} disabled={controlsDisabled} hasPhoto={!!view} buttonHeight={screen.railButtonHeight} pendingJob={!!pendingJob} /></View>}
     </View>
 
     <Pressable pointerEvents={activeTool || maskOpen ? "none" : "auto"} accessibilityRole="button" accessibilityLabel="작업 안내 자세히 보기" disabled={maskOpen || interacting} onPress={openJobTools} style={[styles.status, (activeTool || maskOpen || interacting) && { opacity: 0 }]}>
@@ -330,6 +346,7 @@ function Editor() {
         {activeTool === 'photo' && <>
           <View style={styles.row}><View style={styles.grow}><Button title={view ? "사진 추가" : "사진 선택"} onPress={choosePhoto} disabled={disabled} /></View>{!view && <View style={styles.grow}><Button title="연습용 그림" onPress={useFixture} secondary disabled={disabled} /></View>}</View>
           <Text style={styles.help}>사진을 추가하면 기존 캔버스에 새 스티커로 쌓여요. 마지막 편집만 자동 보관해요.</Text>
+          {view && <Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} />}
           {view?.pendingPhoto && <><Button title="가져온 사진 자르기 계속" secondary disabled={disabled} onPress={() => openImported()} /><Button title="추가 사진 AI로 스티커 만들기" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { assetId: view.pendingPhoto!.id, prompt, point: null }, '추가 사진에서 피사체를 분리하는 중')} /></>}
         </>}
         {activeTool === 'subject' && view && <>
@@ -350,6 +367,7 @@ function Editor() {
         </>}
         {activeTool === 'background' && draft && themeTab === 'theme' && <>
           <View style={styles.row}>{(['plain', 'frame', 'sticker'] as const).map(mode => <View style={styles.grow} key={mode}><Button title={themeName(mode)} secondary selected={(draft.mode || 'frame') === mode} disabled={disabled || (mode === 'sticker' && !view?.subject)} onPress={() => selectTheme(mode)} /></View>)}</View>
+          {draft.mode === 'frame' && <Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} />}
           <Text style={styles.help}>{draft.mode === 'frame' ? '피사체가 폰 프레임 밖으로 튀어나오는 테마예요. 위치·크기와 그림자로 입체감을 조절하세요.' : draft.mode === 'sticker' ? '분리한 피사체만 투명 PNG로 내보내요. 체크무늬는 저장되지 않아요.' : '기본 캔버스에서 사진 또는 분리한 피사체를 편집해요. AI 장식도 함께 배치할 수 있어요.'}</Text>
           {!view?.subject && <Text style={styles.help}>피사체에서 AI로 분리하거나 테두리로 자르면 팝아웃·스티커에 사용할 수 있어요.</Text>}
         </>}
@@ -367,7 +385,7 @@ function Editor() {
       </ScrollView>
     </View>}
 
-    {!keyboardOpen && <View style={styles.bottomBar}>
+    {!keyboardOpen && !maskOpen && <View style={styles.bottomBar}>
       <Pressable accessibilityRole="button" accessibilityLabel="누르고 원본 보기" onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} disabled={controlsDisabled || !view} style={[styles.bottomButton, (controlsDisabled || !view) && styles.disabled]}><Text style={styles.bottomText}>◫ 원본</Text></Pressable>
       <View style={styles.bottomCenter}>{picking ? <Button title="선택 화면 닫기" secondary disabled={controlsDisabled} onPress={() => setPicking(false)} /> : <Pressable accessibilityRole="button" disabled={controlsDisabled || !view} onPress={() => { setPositionTab('ratio'); setActiveTool('position'); }} style={styles.ratioChip}><Text style={styles.ratioText}>{draft ? ({ portrait: '4:5', story: '9:16', square: '1:1' }[draft.ratio]) : '사진 편집'}</Text></Pressable>}</View>
       <Pressable accessibilityRole="button" accessibilityLabel="완성 사진 공유" disabled={controlsDisabled || !view} onPress={() => save(true)} style={[styles.bottomButton, (controlsDisabled || !view) && styles.disabled]}><Text style={styles.bottomText}>공유 ↗</Text></Pressable>

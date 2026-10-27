@@ -45,7 +45,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
   function mutate(fn) { const next = projectTail.then(fn); projectTail = next.catch(() => {}); return next; }
   async function view(id, previewOnly = false) {
     const p = await store.get(id);
-    const source = await store.read(id, 'source.png');
+    const source = await store.read(id, p.sourceFile || 'source.png');
     const cutout = p.selectedId ? await store.read(id, p.maskEdits?.[p.selectedId] || `subject-${p.selectedId}.png`) : null;
     const photoSource = p.selectedId && p.maskEdits?.[p.selectedId]
       ? await photoWithMaskEdits(source, await store.read(id, `subject-${p.selectedId}.png`), cutout) : source;
@@ -89,6 +89,21 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         await store.save(project); send(200, await view(project.id)); return;
       }
       const project = await store.get(data.projectId);
+      if (url.pathname === '/source/replace') {
+        insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');
+        insist(!jobs.active, 'AI 작업이 끝난 뒤 메인 사진을 변경해 주세요.', 409);
+        const photo = await normalisePhoto(Buffer.from(data.image, 'base64'));
+        const sourceFile = `source-${randomUUID()}.png`;
+        await store.write(project.id, sourceFile, photo.bytes);
+        await mutate(async () => {
+          insist(!jobs.active, 'AI 작업이 끝난 뒤 메인 사진을 변경해 주세요.', 409);
+          const latest = await store.get(project.id), options = settings(latest.options || undefined);
+          Object.assign(latest, { sourceFile, width: photo.width, height: photo.height, selectedId: null, candidates: [], maskEdits: {}, maskRevision: (latest.maskRevision || 0) + 1, provenance: 'user' });
+          latest.options = settings({ ...options, hidePrimary: false, zoom: options.mode === 'frame' ? 1.55 : 1, x: 0, y: options.mode === 'frame' ? -0.15 : 0 });
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
       if (url.pathname === '/imports') {
         insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');
         const photo = await normalisePhoto(Buffer.from(data.image, 'base64'));
@@ -127,10 +142,11 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       if (url.pathname === '/cutout') {
         const asset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
         insist(!data.assetId || asset, '가져온 사진을 찾지 못했어요.');
-        const source = await store.read(project.id, asset ? asset.file : 'source.png');
+        const source = await store.read(project.id, asset ? asset.file : project.sourceFile || 'source.png');
         const cutout = await contourCutout(source, data.points);
         await mutate(async () => {
           const latest = await store.get(project.id), id = randomUUID();
+          insist(asset || (latest.sourceFile || 'source.png') === (project.sourceFile || 'source.png'), '메인 사진이 변경됐어요. 새 사진에서 다시 잘라 주세요.', 409);
           if (asset) {
             insist((latest.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
             const file = `sticker-${id}.png`, sourceFile = `sticker-source-${id}.png`, trimmed = await trimSticker(source, cutout);
@@ -174,7 +190,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           latest.maskEdits ||= {};
           if (url.pathname === '/mask/reset') delete latest.maskEdits[latest.selectedId];
           else {
-            const source = await store.read(project.id, 'source.png');
+            const source = await store.read(project.id, latest.sourceFile || 'source.png');
             const cutout = await store.read(project.id, latest.maskEdits[latest.selectedId] || `subject-${latest.selectedId}.png`);
             const corrected = await refineMask(source, cutout, data.strokes);
             const name = `mask-${randomUUID()}.png`;
@@ -230,7 +246,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         }
         const isDecoration = url.pathname === '/decoration/segment';
         insist(!isDecoration || project.decorationPending, '장식을 먼저 생성해 주세요.');
-        const image = await store.read(project.id, isDecoration ? 'decoration-source.png' : importedAsset ? importedAsset.file : 'source.png');
+        const image = await store.read(project.id, isDecoration ? 'decoration-source.png' : importedAsset ? importedAsset.file : project.sourceFile || 'source.png');
         const m = await sharp(image).metadata();
         const result = await segment({ key, image, width: m.width, height: m.height, point: isDecoration ? null : data.point, prompt: isDecoration ? project.decorationPending.prompt : data.prompt }, fetcher);
         insist(result.masks.length > 0, '대상을 찾지 못했어요. 사진에서 대상을 탭하거나 더 짧게 설명해 주세요.', 422);
@@ -259,7 +275,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
             await store.save(latest); return;
           }
           if (isDecoration) { latest.decoration = true; latest.decorationProvenance = { image: latest.decorationPending, segmentation: { model: result.model, requestId: result.requestId } }; latest.decorationPending = null; }
-          else { latest.candidates = candidates; latest.selectedId = candidates.length === 1 ? candidates[0].id : null; latest.options = settings(latest.options || undefined); latest.options.hidePrimary = false; }
+          else { insist((latest.sourceFile || 'source.png') === (project.sourceFile || 'source.png'), '메인 사진이 변경됐어요. 새 사진에서 다시 분리해 주세요.', 409); latest.candidates = candidates; latest.selectedId = candidates.length === 1 ? candidates[0].id : null; latest.options = settings(latest.options || undefined); latest.options.hidePrimary = false; }
           await store.save(latest);
         });
         return { projectId: project.id, requestId: result.requestId };
