@@ -4,6 +4,20 @@ import sharp from 'sharp';
 import { compose, geometry, cutoutFromRaster, normalisePhoto } from '../server/composition.mjs';
 import { fixture } from '../server/fixture.mjs';
 
+test('sticker mode has transparent output and moving it leaves no original copy behind', async () => {
+  const source = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#ff0000' } }).png().toBuffer();
+  const { contourCutout } = await import('../server/mask.mjs');
+  const cutout = await contourCutout(source, [{ x: 0.4, y: 0.4 }, { x: 0.6, y: 0.4 }, { x: 0.6, y: 0.6 }, { x: 0.4, y: 0.6 }]);
+  const options = { mode: 'sticker', zoom: 1, x: 0.3, y: 0, shadow: 0.8 };
+  const rendered = await compose({ source, cutout, options });
+  const pixels = await sharp(rendered.bytes).raw().toBuffer();
+  const alpha = (x, y) => pixels[(y * rendered.width + x) * 4 + 3];
+  assert.equal(alpha(0, 0), 0);
+  assert.equal(alpha(540, 675), 0, 'old centered copy must not remain');
+  const g = geometry({ width: 100, height: 100 }, options);
+  assert.equal(alpha(g.photo.x + Math.round(g.photo.width / 2), g.photo.y + Math.round(g.photo.height / 2)), 255);
+});
+
 test('source and subject remain aligned in all output ratios and negative crop positions', async () => {
   const sample = await fixture();
   for (const ratio of ['portrait', 'square', 'story']) {

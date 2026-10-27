@@ -46,6 +46,7 @@ function Editor() {
   const [busy, setBusy] = useState(''), [message, setMessage] = useState('사진 한 장으로, 프레임 밖으로.'), [saveState, setSaveState] = useState('');
   const [exportMessage, setExportMessage] = useState('');
   const [interacting, setInteracting] = useState(false), [maskOpen, setMaskOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
@@ -142,6 +143,15 @@ function Editor() {
       setMessage(reset ? '누끼 보정을 초기화했어요.' : '누끼 보정을 적용했어요. 추가 AI 호출은 없어요.');
     } finally { lock.current = false; setBusy(''); }
   };
+  const cutSticker = async (strokes: BrushStroke[]) => {
+    if (!view || lock.current) throw new Error('사진을 먼저 열어 주세요.');
+    lock.current = true; setBusy('테두리를 따라 자르는 중');
+    try {
+      accept(await request<ProjectView>(connection, '/cutout', { projectId: view.project.id, points: strokes[0]?.points || [] }));
+      setHistory([]); setMaskOpen(false);
+      setMessage('배경 없는 스티커예요. 드래그·핀치로 이동·확대하세요.');
+    } finally { lock.current = false; setBusy(''); }
+  };
   const change = <K extends keyof EditOptions>(name: K, value: EditOptions[K]) => setDraft(current => current ? { ...current, [name]: value } : current);
   const dirty = !!view && !!draft && JSON.stringify(view.options) !== JSON.stringify(draft);
   const disabled = !!busy || !ready;
@@ -176,7 +186,7 @@ function Editor() {
     setActiveTool(current => current === id ? null : id);
   };
   const closeTools = () => { setActiveTool(null); Keyboard.dismiss(); };
-  const openMask = () => { Keyboard.dismiss(); setPicking(false); setActiveTool(null); setMaskOpen(true); };
+  const openMask = (outline = false) => { Keyboard.dismiss(); setPicking(false); setActiveTool(null); setOutlineOpen(outline); setMaskOpen(true); };
   const undo = () => {
     if (dirty && view) setDraft(view.options);
     else if (history.length) render(history[history.length - 1], true);
@@ -201,7 +211,7 @@ function Editor() {
 
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
       <View style={[styles.canvasArea, { paddingRight: canvasSize.railWidth + 10 }]}>
-        {maskOpen && view ? <MaskEditor embedded visible view={view} viewportHeight={Math.max(32, stage.height - 20)} onClose={() => setMaskOpen(false)} onApply={strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
+        {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={view} viewportHeight={Math.max(32, stage.height - 20)} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
           {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={setInteracting} onCommit={options => { setDraft(options); render(options); }} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
@@ -229,7 +239,9 @@ function Editor() {
           {projects.length > 0 && <><Text style={styles.panelTitle}>최근 작업</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>{projects.slice(0, 5).map((project, i) => <Button key={project.id} title={`작업 ${i + 1}${project.id === view?.project.id ? ' · 현재' : ''}`} secondary disabled={disabled || project.id === view?.project.id} onPress={() => openProject(project.id)} />)}</ScrollView></>}
         </>}
         {activeTool === 'subject' && view && <>
-          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="누끼 다듬기" secondary disabled={disabled || !view.subject} onPress={openMask} /></View></View>
+          <Button title="테두리로 자르기 → 스티커" disabled={disabled} onPress={() => openMask(true)} />
+          {view.subject && <View style={styles.row}><Button title="스티커만" secondary selected={draft?.mode === 'sticker'} disabled={disabled} onPress={() => change('mode', 'sticker')} /><Button title="폰 프레임" secondary selected={draft?.mode !== 'sticker'} disabled={disabled} onPress={() => change('mode', 'frame')} /></View>}
+          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || !view.subject} onPress={() => openMask()} /></View></View>
           <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
           <Text style={styles.help}>{picking ? (point ? '누른 점을 기준으로 분리해요.' : '사진에서 튀어나올 대상을 눌러주세요.') : '분리한 피사체를 다듬거나 다시 선택할 수 있어요.'} AI 분리 시 사진을 Meta에 전송합니다.</Text>
           {view.project.candidates.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</ScrollView>}

@@ -6,7 +6,9 @@ export const DEFAULTS = Object.freeze({ ratio: 'portrait', zoom: 1.25, x: 0, y: 
 
 export function settings(value = {}) {
   insist(value && typeof value === 'object' && !Array.isArray(value), '편집 설정이 올바르지 않아요.');
-  const result = { ...DEFAULTS };
+  const result = { mode: 'frame', ...DEFAULTS };
+  if (Object.hasOwn(value, 'mode')) result.mode = value.mode;
+  insist(['frame', 'sticker'].includes(result.mode), '편집 모드를 확인해 주세요.');
   for (const name of Object.keys(DEFAULTS)) if (Object.hasOwn(value, name)) result[name] = value[name];
   insist(['portrait', 'story', 'square'].includes(result.ratio), '지원하지 않는 비율이에요.');
   insist(/^#[0-9a-f]{6}$/i.test(result.background), '배경 색상을 확인해 주세요.');
@@ -47,7 +49,7 @@ export async function compose({ source, cutout, decoration, options }) {
   const phone = svg(width, height, `<defs><filter id="s" x="-30%" y="-20%" width="160%" height="150%"><feGaussianBlur stdDeviation="19"/></filter></defs><rect x="${q.x - 12}" y="${q.y + 6}" width="${q.width + 24}" height="${q.height + 36}" rx="48" fill="#0d1725" opacity=".18" filter="url(#s)"/><rect x="${q.x - 15}" y="${q.y - 15}" width="${q.width + 30}" height="${q.height + 30}" rx="46" fill="#171e2b"/><rect x="${q.x - 8}" y="${q.y - 8}" width="${q.width + 16}" height="${q.height + 16}" rx="39" fill="none" stroke="#58606e" stroke-width="2"/>`);
   const photoLayer = await place(source, photo, width, height);
   const inside = await sharp(photoLayer).composite([{ input: screenMask, blend: 'dest-in' }]).png().toBuffer();
-  const layers = [{ input: phone }, { input: inside }];
+  const layers = s.mode === 'sticker' ? [] : [{ input: phone }, { input: inside }];
   let adornment;
   if (decoration) {
     const m = await sharp(decoration).metadata(), dw = Math.round(width * s.decorationScale), dh = Math.round(dw * m.height / m.width);
@@ -60,8 +62,8 @@ export async function compose({ source, cutout, decoration, options }) {
     const subject = await place(cutout, photo, width, height);
     // The lower edge remains inside the rounded screen; the top and sides can escape.
     const escapeMask = svg(width, height, `<rect width="${width}" height="${q.y}" fill="white"/><rect x="0" y="${q.y}" width="${width}" height="${q.height - 40}" fill="white"/><rect x="${q.x}" y="${q.y}" width="${q.width}" height="${q.height}" rx="30" fill="white"/>`);
-    const foreground = await sharp(subject).composite([{ input: escapeMask, blend: 'dest-in' }]).png().toBuffer();
-    if (s.shadow > 0) {
+    const foreground = s.mode === 'sticker' ? subject : await sharp(subject).composite([{ input: escapeMask, blend: 'dest-in' }]).png().toBuffer();
+    if (s.shadow > 0 && s.mode !== 'sticker') {
       const { data } = await sharp(foreground).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       for (let i = 0; i < data.length; i += 4) { data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = Math.round(data[i + 3] * s.shadow); }
       const shadow = await sharp(data, { raw: { width, height, channels: 4 } }).blur(10).png().toBuffer();
@@ -71,7 +73,7 @@ export async function compose({ source, cutout, decoration, options }) {
     } else layers.push({ input: foreground });
   }
   if (adornment && s.decorationDepth === 'front') layers.push({ input: adornment });
-  const bytes = await canvas(width, height, s.background).composite(layers).png().toBuffer();
+  const bytes = await canvas(width, height, s.mode === 'sticker' ? '#00000000' : s.background).composite(layers).png().toBuffer();
   return { bytes, width, height, options: s, geometry: g };
 }
 

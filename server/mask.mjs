@@ -1,6 +1,30 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
 
+export async function contourCutout(source, points) {
+  insist(Array.isArray(points) && points.length >= 3 && points.length <= 2000, '테두리를 한 바퀴 그려 주세요.');
+  for (const p of points) insist(p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1, '사진 안에서 테두리를 그려 주세요.');
+  const area = Math.abs(points.reduce((sum, p, i) => { const q = points[(i + 1) % points.length]; return sum + p.x * q.y - q.x * p.y; }, 0)) / 2;
+  insist(area >= 0.0001, '테두리 안에 남길 영역이 있어야 해요.');
+  const { width, height } = await sharp(source).metadata();
+  const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><polygon points="${points.map(p => `${p.x * width},${p.y * height}`).join(' ')}" fill="white" fill-rule="evenodd"/></svg>`);
+  const alpha = await sharp({ create: { width, height, channels: 3, background: '#000' } }).composite([{ input: mask }]).greyscale().raw().toBuffer();
+  const rgb = await sharp(source).removeAlpha().png().toBuffer();
+  return sharp(rgb).joinChannel(alpha, { raw: { width, height, channels: 1 } }).png().toBuffer();
+}
+
+// Erasing foreground pixels must not reveal the unedited duplicate in the phone.
+export async function photoWithMaskEdits(source, original, edited) {
+  const { width, height } = await sharp(source).metadata();
+  const before = await sharp(original).extractChannel('alpha').raw().toBuffer();
+  const after = await sharp(edited).extractChannel('alpha').raw().toBuffer();
+  insist(before.length === width * height && after.length === before.length, '보정 사진의 크기가 맞지 않아요.');
+  const alpha = Buffer.alloc(before.length);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = 255 - Math.max(0, before[i] - after[i]);
+  const rgb = await sharp(source).removeAlpha().png().toBuffer();
+  return sharp(rgb).joinChannel(alpha, { raw: { width, height, channels: 1 } }).png().toBuffer();
+}
+
 export function validateStrokes(strokes) {
   insist(Array.isArray(strokes) && strokes.length > 0 && strokes.length <= 32, '보정할 획은 한 번에 1~32개까지 가능해요.');
   let count = 0;

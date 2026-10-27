@@ -1,7 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
-import { refineMask, validateStrokes } from '../server/mask.mjs';
+import { refineMask, validateStrokes, contourCutout, photoWithMaskEdits } from '../server/mask.mjs';
+
+test('a closed contour keeps only its interior pixels and rejects empty outlines', async () => {
+  const source = await sharp({ create: { width: 100, height: 80, channels: 3, background: '#e04867' } }).png().toBuffer();
+  const points = [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2 }, { x: 0.8, y: 0.8 }, { x: 0.2, y: 0.8 }];
+  const cutout = await contourCutout(source, points);
+  const data = await sharp(cutout).raw().toBuffer();
+  assert.deepEqual([...data.subarray((40 * 100 + 50) * 4, (40 * 100 + 50) * 4 + 4)], [224, 72, 103, 255]);
+  assert.equal(data[(5 * 100 + 5) * 4 + 3], 0);
+  await assert.rejects(contourCutout(source, points.slice(0, 2)), /한 바퀴/);
+  await assert.rejects(contourCutout(source, [{ x: 0, y: 0 }, { x: 0.5, y: 0.5 }, { x: 1, y: 1 }]), /영역/);
+});
+
+test('erased foreground pixels cannot reappear through the original photo layer', async () => {
+  const source = await sharp({ create: { width: 100, height: 80, channels: 3, background: '#e04867' } }).png().toBuffer();
+  const original = await contourCutout(source, [{ x: 0.2, y: 0.2 }, { x: 0.8, y: 0.2 }, { x: 0.8, y: 0.8 }, { x: 0.2, y: 0.8 }]);
+  const edited = await refineMask(source, original, [{ mode: 'erase', radius: 0.1, points: [{ x: 0.5, y: 0.5 }] }]);
+  const photo = await photoWithMaskEdits(source, original, edited);
+  const data = await sharp(photo).raw().toBuffer();
+  assert.equal(data[(40 * 100 + 50) * 4 + 3], 0);
+  assert.equal(data[(5 * 100 + 5) * 4 + 3], 255, 'unrelated background stays intact');
+});
 
 test('erase and restore change alpha while restored RGB comes from the original photo', async () => {
   const source = await sharp({ create: { width: 100, height: 80, channels: 3, background: '#e04867' } }).png().toBuffer();
