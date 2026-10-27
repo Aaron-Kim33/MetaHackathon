@@ -9,7 +9,7 @@ import { compose, normalisePhoto, settings, cutoutFromRaster } from './compositi
 import { Store, ModelJobs, validId } from './store.mjs';
 import { segment, generateDecoration } from './meta.mjs';
 import { fixture } from './fixture.mjs';
-import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds } from './mask.mjs';
+import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds, makeHitMask } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function localToken(directory) {
@@ -57,7 +57,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const preview = { image: encoded(result.bytes), baseImage: encoded(result.baseBytes), primaryImage: encoded(result.primaryBytes), width: result.width, height: result.height, options: result.options, baseOptions: result.options, imageOptions: result.options };
     if (previewOnly) return preview;
     const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
-    return { ...preview, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: stickers.map(({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label })), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
+    return { ...preview, subjectHitMask: cutout ? await makeHitMask(cutout) : null, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: await Promise.all(stickers.map(async ({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label, hitMask: await makeHitMask(bytes) }))), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };

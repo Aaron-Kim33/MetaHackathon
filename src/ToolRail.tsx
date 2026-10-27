@@ -20,4 +20,4 @@ export function ToolRail(props: Props) {
     </Pressable>;
   })}</View>;
 }
-const styles = StyleSheet.create({ rail: { width: 52, borderRadius: 24, backgroundColor: '#302D38', paddingVertical: 4 }, tool: { alignItems: 'center', justifyContent: 'center', gap: 1, marginHorizontal: 3, borderRadius: 19 }, active: { backgroundColor: '#7762C9' }, disabled: { opacity: 0.3 }, icon: { color: '#fff', fontSize: 22, lineHeight: 25, fontWeight: '500' }, label: { color: '#E8E2F3', fontSize: 9, lineHeight: 12 } });
+const styles = StyleSheet.create({ rail: { width: 52, borderRadius: 24, backgroundColor: '#302D38DD', paddingVertical: 4 }, tool: { alignItems: 'center', justifyContent: 'center', gap: 1, marginHorizontal: 3, borderRadius: 19 }, active: { backgroundColor: '#7762C9' }, disabled: { opacity: 0.3 }, icon: { color: '#fff', fontSize: 22, lineHeight: 25, fontWeight: '500' }, label: { color: '#E8E2F3', fontSize: 9, lineHeight: 12 } });

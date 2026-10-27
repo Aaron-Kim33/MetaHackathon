@@ -1,5 +1,12 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
+export async function makeHitMask(bytes) {
+  const width = 64, height = 64;
+  const alpha = await sharp(bytes).ensureAlpha().extractChannel('alpha').resize(width, height, { fit: 'fill' }).raw().toBuffer();
+  const bits = Buffer.alloc(width * height / 8);
+  for (let i = 0; i < alpha.length; i++) if (alpha[i] > 8) bits[Math.floor(i / 8)] |= 1 << (i % 8);
+  return { width, height, bits: bits.toString('hex') };
+}
 export async function alphaBounds(cutout) {
   const { data, info } = await sharp(cutout).extractChannel('alpha').raw().toBuffer({ resolveWithObject: true });
   let left = info.width, top = info.height, right = -1, bottom = -1;

@@ -9,6 +9,7 @@ import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
+import { keepSceneVisible, recoverScene } from './src/viewport';
 import { orderedLayers } from './src/layer-order';
 import { sameBase, sameOptions, moveLayer, rebaseOptions } from './src/edit-performance';
 import { DragTrash } from './src/DragTrash';
@@ -48,7 +49,7 @@ function Editor() {
   const [stage, setStage] = useState({ width: viewport.width, height: Math.max(0, viewport.height - 146) });
   const [view, setView] = useState<ProjectView | null>(null), [draft, setDraft] = useState<EditOptions | null>(null);
   const [history, setHistory] = useState<EditOptions[]>([]);
-  const [activeStickerId, setActiveStickerId] = useState<string | null>(null);
+  const [activeStickerId, setActiveStickerId] = useState<string | null>('primary');
   const [maskTarget, setMaskTarget] = useState<ProjectView | null>(null);
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null), [maskStickerId, setMaskStickerId] = useState<string | null>(null);
   const [pendingJob, setPendingJob] = useState<string | null>(null), [ready, setReady] = useState(false);
@@ -94,7 +95,7 @@ function Editor() {
     alive.current = true;
     restore().then(async snapshot => {
       if (snapshot?.view) {
-        try { const remote = await request<ProjectView>(initialConnection, `/projects/${snapshot.view.project.id}`); snapshot = { ...snapshot, view: remote, draft: rebaseOptions(snapshot.draft || remote.options, remote) }; } catch { /* Keep the last device draft when offline. */ }
+        try { const remote = await request<ProjectView>(initialConnection, `/projects/${snapshot.view.project.id}`); snapshot = { ...snapshot, view: remote, draft: keepSceneVisible(rebaseOptions(snapshot.draft || remote.options, remote), remote) }; } catch { /* Keep the last device draft when offline. */ }
       }
       if (!alive.current) return;
       if (snapshot) { setView(snapshot.view); setDraft(snapshot.draft || snapshot.view?.options || null); setHistory(snapshot.history || []); setActiveStickerId(snapshot.activeStickerId || null); setPendingJob(snapshot.pendingJob); setMessage(snapshot.pendingJob ? '미확인 AI 작업이 있어요. 상태 확인 후 계속해 주세요.' : '마지막 편집을 복원했어요.'); }
@@ -130,7 +131,7 @@ function Editor() {
       await savePendingOptions();
       const next = await request<ProjectView>(connection, '/imports', { projectId: view.project.id, image });
       accept(next); openImported(next); setMessage('기존 작업은 유지돼요. 추가 사진에서 새 스티커를 잘라 주세요.');
-    } else { accept(await request<ProjectView>(connection, '/projects', { image })); setHistory([]); setActiveStickerId(null); setMessage('사진을 불러왔어요. 피사체 분리·장식·테마로 편집해 보세요.'); }
+    } else { accept(await request<ProjectView>(connection, '/projects', { image })); setHistory([]); setActiveStickerId('primary'); setMessage('사진을 불러왔어요. 피사체 분리·장식·테마로 편집해 보세요.'); }
   }); };
   const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
@@ -148,7 +149,7 @@ function Editor() {
   };
   const render = (options: EditOptions, undo = false) => {
     if (!view) return;
-    options = rebaseOptions(options, view);
+    options = keepSceneVisible(rebaseOptions(options, view), view);
     if (sameOptions(options, draft || view.options)) { if (undo) setHistory(current => current.slice(0, -1)); return; }
     setHistory(current => undo ? current.slice(0, -1) : [...current.slice(-19), draft || view.options]);
     setDraft(options); setExportMessage('');
@@ -178,7 +179,7 @@ function Editor() {
       await savePendingOptions();
       const next = await request<ProjectView>(connection, '/cutout', { projectId: view.project.id, assetId: editingAssetId, points: strokes[0]?.points || [] });
       accept(next);
-      if (editingAssetId) setActiveStickerId(next.stickers?.at(-1)?.id || null);
+      if (editingAssetId) setActiveStickerId(next.stickers?.at(-1)?.id || null); else setActiveStickerId('primary');
       setHistory([]); setMaskOpen(false);
       setMessage(editingAssetId ? '새 스티커를 추가했어요. 선택해서 이동·확대하세요.' : '자른 피사체를 적용했어요. 기존 스티커와 테마는 유지돼요.');
     } finally { lock.current = false; setBusy(''); }
@@ -259,7 +260,7 @@ function Editor() {
   const openMask = (outline = false) => {
     if (!view) return;
     Keyboard.dismiss();
-    if (!outline && activeStickerId) { void task('스티커를 여는 중', async () => { setMaskTarget(await request<ProjectView>(connection, '/stickers/edit', { projectId: view.project.id, stickerId: activeStickerId })); setMaskStickerId(activeStickerId); setEditingAssetId(null); setPicking(false); setActiveTool(null); setOutlineOpen(false); setMaskOpen(true); }); return; }
+    if (!outline && activeStickerId && activeStickerId !== 'primary') { void task('스티커를 여는 중', async () => { setMaskTarget(await request<ProjectView>(connection, '/stickers/edit', { projectId: view.project.id, stickerId: activeStickerId })); setMaskStickerId(activeStickerId); setEditingAssetId(null); setPicking(false); setActiveTool(null); setOutlineOpen(false); setMaskOpen(true); }); return; }
     setMaskTarget(view); setEditingAssetId(null); setMaskStickerId(null); setPicking(false); setActiveTool(null); setOutlineOpen(outline); setMaskOpen(true);
   };
   const undo = () => {
@@ -277,16 +278,16 @@ function Editor() {
   const changeSticker = (name: 'x' | 'y' | 'scale', value: number) => { if (draft) render({ ...draft, stickerTransforms: draft.stickerTransforms.map(item => item.id === activeStickerId ? { ...item, [name]: value } : item) }); };
   const dropDelete = (id: string, options: EditOptions) => {
     if (!view) return;
-    if (id === 'primary') { render({ ...options, hidePrimary: true }); return; }
+    if (id === 'primary') { render({ ...options, hidePrimary: true }); setActiveStickerId(null); return; }
     void task('스티커를 삭제하는 중', async () => {
       const next = await request<ProjectView>(connection, '/stickers/remove', { projectId: view.project.id, stickerId: id, options });
       accept(next); setActiveStickerId(null); setHistory([]); setMessage('휴지통에 놓은 스티커를 삭제했어요.');
     });
   };
-  const removeSticker = () => { if (!view || !activeStickerId) return; void task('스티커를 삭제하는 중', async () => { await savePendingOptions(); accept(await request<ProjectView>(connection, '/stickers/remove', { projectId: view.project.id, stickerId: activeStickerId })); setActiveStickerId(null); setHistory([]); setMessage('선택한 스티커만 삭제했어요.'); }); };
-  const bringStickerForward = () => { if (!draft || !activeTransform) return; const next = { ...draft, stickerTransforms: [...draft.stickerTransforms.filter(item => item.id !== activeStickerId), activeTransform], layerOrder: [...orderedLayers(draft).filter(id => id !== activeStickerId), activeStickerId!] }; setDraft(next); render(next); };
+  const removeSticker = () => { if (!view || !activeStickerId) return; if (activeStickerId === 'primary' && draft) { dropDelete('primary', draft); return; } void task('스티커를 삭제하는 중', async () => { await savePendingOptions(); accept(await request<ProjectView>(connection, '/stickers/remove', { projectId: view.project.id, stickerId: activeStickerId })); setActiveStickerId(null); setHistory([]); setMessage('선택한 스티커만 삭제했어요.'); }); };
+  const bringStickerForward = () => { if (!draft || !activeStickerId) return; render({ ...draft, layerOrder: [...orderedLayers(draft).filter(id => id !== activeStickerId), activeStickerId] }); };
   const layerPicker = view?.stickers?.length ? <>
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}><Button title="기본 사진" secondary selected={!activeStickerId} disabled={disabled} onPress={() => setActiveStickerId(null)} />{view.stickers.map(sticker => <Button key={sticker.id} title={sticker.label} secondary selected={activeStickerId === sticker.id} disabled={disabled} onPress={() => setActiveStickerId(sticker.id)} />)}</ScrollView>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}><Button title="기본 사진" secondary selected={activeStickerId === 'primary'} disabled={disabled} onPress={() => setActiveStickerId('primary')} />{view.stickers.map(sticker => <Button key={sticker.id} title={sticker.label} secondary selected={activeStickerId === sticker.id} disabled={disabled} onPress={() => setActiveStickerId(sticker.id)} />)}</ScrollView>
     {activeStickerId && <View style={styles.row}><Button title="맨 앞으로" secondary disabled={disabled} onPress={bringStickerForward} /><Button title="선택 스티커 삭제" secondary disabled={disabled} onPress={removeSticker} /></View>}
   </> : null;
   const openJobTools = () => { if (maskOpen) return; setMoreTab('jobs'); setActiveTool('more'); };
@@ -294,13 +295,14 @@ function Editor() {
     <View style={styles.top}>
       <View><Text style={styles.brand}>reel talk<Text style={styles.brandDot}> ✳</Text></Text><Pressable accessibilityRole="button" accessibilityLabel="현재 테마 선택" disabled={!view || controlsDisabled} onPress={() => { setThemeTab('theme'); setActiveTool('background'); }}><Text style={styles.eyebrow}>{view ? themeName(draft?.mode) + ' ▾' : 'AI PHOTO EDITOR'}</Text></Pressable></View>
       <View style={styles.row}>
+        <Pressable accessibilityRole="button" accessibilityLabel="화면 밖 요소 되찾기" disabled={controlsDisabled || !view || !draft} onPress={() => { if (view && draft) { render(recoverScene(draft, view)); setMessage('화면 밖 요소를 다시 가져왔어요.'); } }} style={styles.topIcon}><Text style={styles.topIconText}>⌖</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="실행 취소" disabled={controlsDisabled || (!dirty && !history.length)} onPress={undo} style={[styles.topIcon, (controlsDisabled || (!dirty && !history.length)) && styles.disabled]}><Text style={styles.topIconText}>↶</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="사진 앨범에 저장" disabled={controlsDisabled || !view} onPress={() => save()} style={[styles.topSave, (controlsDisabled || !view) && styles.disabled]}><Text style={styles.topSaveText}>저장</Text></Pressable>
       </View>
     </View>
 
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
-      <View style={[styles.canvasArea, { paddingRight: canvasSize.railWidth + 10 }]}>
+      <View style={[styles.canvasArea, maskOpen && { paddingTop: 64, paddingBottom: 64, paddingHorizontal: 12 }]}>
         {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} viewportHeight={Math.max(32, stage.height - 20)} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
           {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
@@ -313,12 +315,12 @@ function Editor() {
       {screen.showRail && <View style={styles.railPosition}><ToolRail active={maskOpen ? 'subject' : activeTool} onSelect={selectTool} disabled={controlsDisabled} hasPhoto={!!view} buttonHeight={screen.railButtonHeight} pendingJob={!!pendingJob} /></View>}
     </View>
 
-    <Pressable accessibilityRole="button" accessibilityLabel="작업 안내 자세히 보기" disabled={maskOpen || interacting} onPress={openJobTools} style={styles.status}>
+    <Pressable pointerEvents={activeTool || maskOpen ? "none" : "auto"} accessibilityRole="button" accessibilityLabel="작업 안내 자세히 보기" disabled={maskOpen || interacting} onPress={openJobTools} style={[styles.status, (activeTool || maskOpen || interacting) && { opacity: 0 }]}>
       {busy ? <ActivityIndicator size="small" color="#BEAFF0" /> : <Text style={[styles.dot, pendingJob && { color: '#F4C47D' }]}>●</Text>}
       <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.statusText}>{exportMessage || message}</Text>
     </Pressable>
 
-    {!!activeTool && !maskOpen && <View style={[styles.sheet, { height: screen.panelHeight }]}>
+    {!!activeTool && !maskOpen && <View pointerEvents={interacting ? "none" : "auto"} style={[styles.sheet, interacting && { opacity: 0 }, { height: screen.panelHeight, bottom: keyboardOpen ? 8 : 64 }]}>
       <View style={styles.sheetHeader}><Text style={styles.sheetTitle}>{activeTool === 'background' ? '테마·배경' : EDITOR_TOOLS.find(tool => tool.id === activeTool)?.label}</Text><Pressable accessibilityRole="button" accessibilityLabel="도구 접기" onPress={closeTools} style={styles.closeButton}><Text style={styles.closeText}>⌄</Text></Pressable></View>
       {activeTool === 'background' && <Tabs items={[{ id: 'theme', label: '테마' }, { id: 'background', label: '배경색' }]} value={themeTab} onChange={setThemeTab} />}
       {activeTool === 'position' && <Tabs items={[{ id: 'move', label: '위치·크기' }, { id: 'shadow', label: '그림자' }, { id: 'ratio', label: '비율' }]} value={positionTab} onChange={setPositionTab} />}
@@ -333,7 +335,7 @@ function Editor() {
         {activeTool === 'subject' && view && <>
           {layerPicker}
           <Button title="테두리로 자르기" disabled={disabled} onPress={() => openMask(true)} />
-          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && !activeStickerId)} onPress={() => openMask()} /></View></View>
+          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
           <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
           <Text style={styles.help}>{picking ? (point ? '누른 점을 기준으로 분리해요.' : '사진에서 분리할 대상을 눌러주세요.') : '분리한 피사체를 다듬거나 다시 선택할 수 있어요.'} AI 분리 시 사진을 Meta에 전송합니다.</Text>
           {view.project.candidates.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { await savePendingOptions(); accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</ScrollView>}
@@ -342,7 +344,7 @@ function Editor() {
         {activeTool === 'position' && draft && <>
           {layerPicker}
           {positionTab === 'move' && activeTransform && <><Stepper title="선택 스티커 크기" value={activeTransform.scale} step={0.05} min={0.08} max={2.5} disabled={disabled} onChange={value => changeSticker('scale', value)} /><Stepper title="선택 스티커 좌우" value={activeTransform.x} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('x', value)} /><Stepper title="선택 스티커 상하" value={activeTransform.y} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('y', value)} /></>}
-          {positionTab === 'move' && !activeTransform && <><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Text style={styles.help}>사진 위에서 드래그·핀치로 바로 조절할 수도 있어요.</Text></>}
+          {positionTab === 'move' && activeStickerId === 'primary' && <><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Text style={styles.help}>사진 위에서 드래그·핀치로 바로 조절할 수도 있어요.</Text></>}
           {positionTab === 'shadow' && <><Stepper title="그림자 진하기" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} />{draft.mode === 'frame' && <><Stepper title="폰 기울기" unit="degrees" value={draft.tilt || 0} step={2} min={-18} max={18} disabled={disabled} onChange={value => change('tilt', value)} /><Stepper title="프레임 깊이" value={draft.depth ?? 0.75} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('depth', value)} /></>}<Text style={styles.help}>기울기·두께와 피사체 그림자는 폰 팝아웃에 적용돼요.</Text></>}
           {positionTab === 'ratio' && <><View style={styles.row}>{(['portrait', 'story', 'square'] as const).map((ratio, i) => <View style={styles.grow} key={ratio}><Button title={['4:5', '9:16', '1:1'][i]} secondary selected={draft.ratio === ratio} disabled={disabled} onPress={() => change('ratio', ratio)} /></View>)}</View><Text style={styles.help}>비율을 바꾼 뒤 사진 위치와 잘리는 부분을 확인하세요.</Text></>}
         </>}
@@ -376,11 +378,11 @@ export default function App() { return <SafeAreaProvider><Editor /></SafeAreaPro
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#19171F' }, editor: { flex: 1 },
-  top: { height: 56, paddingHorizontal: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, brand: { fontSize: 22, fontWeight: '700', color: '#FFF', letterSpacing: -1 }, brandDot: { color: '#B5A0EF' }, eyebrow: { color: '#ABA1B8', fontSize: 9, marginTop: 2, letterSpacing: 1.2 }, topIcon: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#302D38' }, topIconText: { fontSize: 24, color: '#fff' }, topSave: { backgroundColor: '#E8DFFA', borderRadius: 20, height: 38, paddingHorizontal: 20, justifyContent: 'center' }, topSaveText: { color: '#403150', fontSize: 12, fontWeight: '700' },
-  stage: { flex: 1, minHeight: 0 }, canvasArea: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingLeft: 10, paddingVertical: 10 }, canvas: { borderRadius: 18, overflow: 'hidden', backgroundColor: '#EEE8DF' }, railPosition: { position: 'absolute', right: 10, top: 8 }, fixtureBadge: { position: 'absolute', bottom: 8, left: 8, right: 8, alignItems: 'center' }, fixtureText: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: '#ffffffcc', color: '#6B6077', fontSize: 8 },
+  top: { position: 'absolute', left: 0, right: 0, top: 0, zIndex: 100, height: 56, paddingHorizontal: 12, backgroundColor: '#19171FD9', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, brand: { fontSize: 22, fontWeight: '700', color: '#FFF', letterSpacing: -1 }, brandDot: { color: '#B5A0EF' }, eyebrow: { color: '#ABA1B8', fontSize: 9, marginTop: 2, letterSpacing: 1.2 }, topIcon: { width: 40, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#302D38' }, topIconText: { fontSize: 24, color: '#fff' }, topSave: { backgroundColor: '#E8DFFA', borderRadius: 20, height: 38, paddingHorizontal: 20, justifyContent: 'center' }, topSaveText: { color: '#403150', fontSize: 12, fontWeight: '700' },
+  stage: { flex: 1, minHeight: 0 }, canvasArea: { flex: 1, alignItems: 'center', justifyContent: 'center' }, canvas: { borderRadius: 0, overflow: 'hidden', backgroundColor: '#EEE8DF' }, railPosition: { position: 'absolute', right: 10, top: 72, zIndex: 80 }, fixtureBadge: { position: 'absolute', bottom: 8, left: 8, right: 8, alignItems: 'center' }, fixtureText: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: '#ffffffcc', color: '#6B6077', fontSize: 8 },
   empty: { alignItems: 'center', gap: 15, maxWidth: 280 }, emptyMark: { color: '#AC96DD', fontSize: 60, lineHeight: 64 }, emptyTitle: { color: '#F5F0FA', fontSize: 25, lineHeight: 34, fontWeight: '700', textAlign: 'center', letterSpacing: -0.8 }, emptyHint: { fontSize: 11, lineHeight: 17, color: '#AFA4BB', textAlign: 'center' }, sampleLink: { padding: 6 }, sampleText: { color: '#C3B3DF', fontSize: 11 },
-  status: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 17 }, dot: { color: '#A58BD8', fontSize: 7 }, statusText: { flex: 1, color: '#B8ADC6', fontSize: 10, lineHeight: 14 },
-  sheet: { backgroundColor: '#FAF8F5', borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: 'hidden' }, sheetHeader: { height: 42, paddingLeft: 18, paddingRight: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sheetTitle: { color: '#352C40', fontSize: 14, fontWeight: '700' }, closeButton: { width: 42, height: 38, alignItems: 'center', justifyContent: 'center' }, closeText: { color: '#776B82', fontSize: 25 }, sheetScroll: { flex: 1 }, sheetContent: { paddingHorizontal: 17, paddingTop: 8, paddingBottom: 16, gap: 10 }, tabs: { flexDirection: 'row', gap: 5, paddingHorizontal: 16, paddingBottom: 5 }, tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 29, borderRadius: 9, backgroundColor: '#EFEBF2' }, tabSelected: { backgroundColor: '#DDD2EE' }, tabLabel: { color: '#887A95', fontSize: 11 }, tabSelectedLabel: { color: '#514064', fontWeight: '700' },
-  row: { flexDirection: 'row', gap: 7, alignItems: 'center' }, wrap: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' }, grow: { flex: 1 }, button: { backgroundColor: '#7762C9', borderRadius: 12, paddingHorizontal: 13, minHeight: 38, alignItems: 'center', justifyContent: 'center' }, secondary: { backgroundColor: '#EFEBF4' }, selected: { backgroundColor: '#7762C9' }, disabled: { opacity: 0.35 }, buttonText: { color: '#fff', fontWeight: '700', fontSize: 11 }, secondaryText: { color: '#66547E' }, input: { backgroundColor: '#EFECF2', borderRadius: 11, padding: 11, color: '#352C40', fontSize: 12, minHeight: 40 }, help: { color: '#8A7F94', fontSize: 11, lineHeight: 17 }, panelTitle: { color: '#51435F', fontSize: 12, fontWeight: '600' }, stepRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, stepLabel: { fontSize: 12, color: '#62556F' }, value: { width: 34, textAlign: 'center', color: '#62556F', fontVariant: ['tabular-nums'], fontSize: 12 }, swatch: { height: 36, width: 36, borderRadius: 18, borderWidth: 3 },
-  bottomBar: { height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 8 }, bottomButton: { paddingHorizontal: 10, paddingVertical: 12, minWidth: 66, alignItems: 'center' }, bottomText: { color: '#EEE7F7', fontSize: 12, fontWeight: '600' }, bottomCenter: { flex: 1, alignItems: 'center' }, ratioChip: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 18, backgroundColor: '#302D38' }, ratioText: { color: '#C3B4D8', fontSize: 11, fontWeight: '600' },
+  status: { position: 'absolute', bottom: 64, left: 12, right: 76, zIndex: 20, borderRadius: 12, backgroundColor: '#19171FD9', height: 30, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 17 }, dot: { color: '#A58BD8', fontSize: 7 }, statusText: { flex: 1, color: '#B8ADC6', fontSize: 10, lineHeight: 14 },
+  sheet: { position: 'absolute', left: 12, right: 74, zIndex: 90, borderRadius: 18, backgroundColor: '#FAF8F5F5', borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: 'hidden' }, sheetHeader: { height: 42, paddingLeft: 18, paddingRight: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sheetTitle: { color: '#352C40', fontSize: 14, fontWeight: '700' }, closeButton: { width: 42, height: 38, alignItems: 'center', justifyContent: 'center' }, closeText: { color: '#776B82', fontSize: 25 }, sheetScroll: { flex: 1 }, sheetContent: { paddingHorizontal: 17, paddingTop: 8, paddingBottom: 16, gap: 10 }, tabs: { flexDirection: 'row', gap: 5, paddingHorizontal: 16, paddingBottom: 5 }, tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 29, borderRadius: 9, backgroundColor: '#EFEBF2' }, tabSelected: { backgroundColor: '#DDD2EE' }, tabLabel: { color: '#887A95', fontSize: 11 }, tabSelectedLabel: { color: '#514064', fontWeight: '700' },
+  row: { flexDirection: 'row', gap: 7, alignItems: 'center' }, wrap: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' }, grow: { flex: 1 }, button: { backgroundColor: '#7762C9', borderRadius: 12, paddingHorizontal: 13, minHeight: 38, alignItems: 'center', justifyContent: 'center' }, secondary: { backgroundColor: '#EFEBF4' }, selected: { backgroundColor: '#7762C9' }, disabled: { opacity: 0.35 }, buttonText: { color: '#fff', fontWeight: '700', fontSize: 11 }, secondaryText: { color: '#66547E' }, input: { backgroundColor: '#EFECF2', borderRadius: 11, padding: 11, color: '#352C40', fontSize: 12, minHeight: 40 }, help: { color: '#8A7F94', fontSize: 11, lineHeight: 17 }, panelTitle: { color: '#51435F', fontSize: 12, fontWeight: '600' }, stepRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, stepLabel: { flex: 1, marginRight: 6, lineHeight: 16, fontSize: 12, color: '#62556F' }, value: { width: 34, textAlign: 'center', color: '#62556F', fontVariant: ['tabular-nums'], fontSize: 12 }, swatch: { height: 36, width: 36, borderRadius: 18, borderWidth: 3 },
+  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 100, backgroundColor: '#19171FD9', height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, gap: 8 }, bottomButton: { paddingHorizontal: 10, paddingVertical: 12, minWidth: 66, alignItems: 'center' }, bottomText: { color: '#EEE7F7', fontSize: 12, fontWeight: '600' }, bottomCenter: { flex: 1, alignItems: 'center' }, ratioChip: { paddingHorizontal: 18, paddingVertical: 9, borderRadius: 18, backgroundColor: '#302D38' }, ratioText: { color: '#C3B4D8', fontSize: 11, fontWeight: '600' },
 });

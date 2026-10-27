@@ -21,7 +21,8 @@ export type ProjectView = {
   baseImage?: string | null; baseOptions?: EditOptions; imageOptions?: EditOptions;
   primaryImage?: string | null;
   subjectBounds?: { x: number; y: number; width: number; height: number } | null;
-  stickers?: { id: string; data: string; width: number; height: number; label: string }[];
+  subjectHitMask?: import('./hit-testing').HitMask | null;
+  stickers?: { id: string; data: string; width: number; height: number; label: string; hitMask?: import('./hit-testing').HitMask }[];
   pendingPhoto?: { id: string; source: string; width: number; height: number } | null;
 };
 export type Connection = { url: string; token: string };

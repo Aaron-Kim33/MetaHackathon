@@ -1,7 +1,28 @@
-import { unprojectFrame } from './frame.ts';
+import { frameMatrix, unprojectFrame } from './frame.ts';
 export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; tilt?: number; depth?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
 export type Dimensions = { width: number; height: number };
 export type StickerTransform = { id: string; x: number; y: number; scale: number };
+export type NormalizedBounds = { x: number; y: number; width: number; height: number };
+const visibleShift = (start: number, length: number, total: number, minimum: number) => {
+  const keep = Math.min(minimum, length, total);
+  return start + length < keep ? keep - start - length : start > total - keep ? total - keep - start : 0;
+};
+export function keepStickerVisible(source: Dimensions, transform: StickerTransform, canvas: Dimensions, minimum = 140): StickerTransform {
+  const r = stickerRect(source, transform, canvas);
+  return { ...transform, x: Math.max(-0.3, Math.min(1.3, transform.x + visibleShift(r.x, r.width, canvas.width, minimum) / canvas.width)), y: Math.max(-0.3, Math.min(1.3, transform.y + visibleShift(r.y, r.height, canvas.height, minimum) / canvas.height)) };
+}
+export function projectedPhotoRect(source: Dimensions, options: PhotoLayoutOptions, bounds: NormalizedBounds = { x: 0, y: 0, width: 1, height: 1 }) {
+  const g = photoLayout(source, options), p = g.photo, m = frameMatrix(options);
+  const x = p.x + bounds.x * p.width, y = p.y + bounds.y * p.height, w = p.width * bounds.width, h = p.height * bounds.height;
+  const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => ({ x: m.a * (px - g.width / 2) + m.c * (py - g.height / 2) + g.width / 2, y: m.b * (px - g.width / 2) + m.d * (py - g.height / 2) + g.height / 2 }));
+  return { x: Math.min(...corners.map(p => p.x)), y: Math.min(...corners.map(p => p.y)), width: Math.max(...corners.map(p => p.x)) - Math.min(...corners.map(p => p.x)), height: Math.max(...corners.map(p => p.y)) - Math.min(...corners.map(p => p.y)) };
+}
+export function keepPhotoVisible<T extends PhotoLayoutOptions>(source: Dimensions, options: T, bounds?: NormalizedBounds, minimum = 140): T {
+  const g = photoLayout(source, options), r = projectedPhotoRect(source, options, bounds);
+  if (r.width <= 0 || r.height <= 0) return options;
+  const delta = unprojectFrame({ x: visibleShift(r.x, r.width, g.width, minimum), y: visibleShift(r.y, r.height, g.height, minimum) }, g, options, true);
+  return { ...options, x: Math.max(-0.8, Math.min(0.8, options.x + delta.x / g.screen.width)), y: Math.max(-0.8, Math.min(0.8, options.y + delta.y / g.screen.height)) };
+}
 export function stickerRect(source: Dimensions, transform: StickerTransform, canvas: Dimensions) {
   const factor = Math.min(canvas.width / source.width, canvas.height / source.height) * transform.scale;
   const width = Math.max(1, Math.round(source.width * factor)), height = Math.max(1, Math.round(source.height * factor));
@@ -13,7 +34,7 @@ export function gestureSticker(initial: StickerTransform, source: Dimensions, ca
   const scale = Math.min(2.5, Math.max(0.08, initial.scale * gesture.factor)), factor = scale / initial.scale;
   const x = gesture.anchorX * units - (gesture.anchorX * units - (before.x + before.width / 2)) * factor + gesture.dx * units;
   const y = gesture.anchorY * units - (gesture.anchorY * units - (before.y + before.height / 2)) * factor + gesture.dy * units;
-  return { ...initial, scale, x: Math.min(1.3, Math.max(-0.3, x / canvas.width)), y: Math.min(1.3, Math.max(-0.3, y / canvas.height)) };
+  return keepStickerVisible(source, { ...initial, scale, x: Math.min(1.3, Math.max(-0.3, x / canvas.width)), y: Math.min(1.3, Math.max(-0.3, y / canvas.height)) }, canvas);
 }
 export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   const width = 1080, height = options.ratio === 'story' ? 1920 : options.ratio === 'square' ? 1080 : 1350;
@@ -26,7 +47,7 @@ export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   return { width, height, screen, photo };
 }
 const bound = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }): T {
+export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }, bounds?: NormalizedBounds): T {
   if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
   const before = photoLayout(source, initial);
   const display = { width: displayWidth, height: displayWidth * before.height / before.width };
@@ -38,7 +59,7 @@ export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: D
   const after = photoLayout(source, { ...initial, zoom });
   const desiredX = gesture.anchorX * units - (gesture.anchorX * units - before.photo.x) * factor + gesture.dx * units;
   const desiredY = gesture.anchorY * units - (gesture.anchorY * units - before.photo.y) * factor + gesture.dy * units;
-  return { ...initial, zoom, x: bound(initial.x + (desiredX - after.photo.x) / after.screen.width, -0.8, 0.8), y: bound(initial.y + (desiredY - after.photo.y) / after.screen.height, -0.8, 0.8) };
+  return keepPhotoVisible(source, { ...initial, zoom, x: bound(initial.x + (desiredX - after.photo.x) / after.screen.width, -0.8, 0.8), y: bound(initial.y + (desiredY - after.photo.y) / after.screen.height, -0.8, 0.8) }, bounds);
 }
 
 export type BrushPoint = { x: number; y: number };
