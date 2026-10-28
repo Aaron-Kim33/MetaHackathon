@@ -221,7 +221,7 @@ function Editor() {
       const permission = await DeviceMotion.requestPermissionsAsync();
       if (!permission.granted) throw new Error('기울기 미리보기를 사용하려면 설정에서 동작 센서 권한을 허용해 주세요.');
       await savePendingOptions();
-      setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view!.project.id }));
+      setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view!.project.id, renderer: 'layered' }));
       setActiveStickerId(null); setActiveTool(null); setSpatialCalibration(n => n + 1); render({ ...draft, spatialEnabled: true });
       setMessage('사진의 깊이를 분석했어요. 천천히 좌우로 기울여 원근 변화를 확인하세요. 사진 저장은 정지 화면이에요.');
     });
@@ -230,7 +230,7 @@ function Editor() {
     if (!ready || !view || !draft?.spatialEnabled || depthFrame || busy) return;
     if (!spatialRendererAvailable()) { setDraft({ ...draft, spatialEnabled: false }); setMessage('3D 깊이 보기는 새 개발 앱으로 업데이트한 뒤 사용해 주세요.'); return; }
     void task('저장된 사진의 3D 깊이를 준비하는 중', async () => {
-      try { await savePendingOptions(); setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view.project.id })); }
+      try { await savePendingOptions(); setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view.project.id, renderer: 'layered' })); }
       catch (error) { setDraft(current => current ? { ...current, spatialEnabled: false } : current); throw error; }
     });
   }, [ready, view?.project.id, draft?.spatialEnabled, depthFrame, busy]);

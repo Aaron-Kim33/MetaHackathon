@@ -12,6 +12,7 @@ import { COMPOSITION_VERSION } from '../src/composition-scene.ts';
 import { subjectShadow } from './subject-shadow.mjs';
 import { fixture } from './fixture.mjs';
 import { spatialBackdrop, spatialFrame } from './depth.mjs';
+import { spatialLayers } from './spatial-layers.mjs';
 import { deviceMaskCutout, refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds, makeHitMask } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -111,7 +112,9 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         const photo = current.backgroundPhoto;
         const backdrop = photo ? await spatialBackdrop(Buffer.from(photo.data, 'base64'), photo, current, current.options) : null;
         const result = await spatialFrame(Buffer.from(current.image, 'base64'), root, depthEstimator, backdrop);
-        send(200, { ...result, projectId: project.id, options: current.options }); return;
+        const sources = data.renderer === 'layered' ? Object.fromEntries(await Promise.all((current.project.stickers || []).map(async item => [item.id, (await store.read(project.id, item.sourceFile)).toString('base64')]))) : {};
+        const layers = data.renderer === 'layered' ? await spatialLayers(current, root, sources, depthEstimator) : undefined;
+        send(200, { ...result, layers, projectId: project.id, options: current.options }); return;
       }
       if (url.pathname === '/source/replace') {
         insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');

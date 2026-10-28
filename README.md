@@ -168,3 +168,7 @@ Android 로컬 빌드 설정은 QR 스캐너와 피사체 분리의 ML Kit 모�
 개발 서버 깊이 모델 준비: `npm run setup:depth`. FP32 ONNX 모델의 고정 리비전과 SHA256을 확인합니다. [Depth Anything V2 Small](https://github.com/DepthAnything/Depth-Anything-V2)의 Apache 2.0 체크포인트와 [공식 ONNX Community 변환](https://huggingface.co/onnx-community/depth-anything-v2-small)을 사용합니다. 모델은 별도 프로세스에 격리해 기존 합성 라이브러리와 충돌하지 않게 합니다. Meta 모델을 사용하는 대회 기능은 별도로 유지하며 이 보조 모델을 Meta API 호출로 표시하지 않습니다.
 
 경계에서 가까운 면과 먼 면을 분리해 늘어짐을 줄이고, 따로 고른 배경이 있으면 가려진 부분을 그 원본으로 채웁니다. 별도 배경이 없으면 먼 영역의 색을 확장한 보조 배경을 사용하므로 복잡한 머리카락·얇은 물체·큰 가림에서는 흔적이 남을 수 있습니다. 사진 한 장에서 추정한 2.5D 장면이며 보이지 않던 사물의 뒷면을 정확히 복원하지는 않습니다. Apple 공간 장면 API를 사용하지 않습니다.
+
+공간 미리보기 품질 보정 중: 합성 전체에 한 장의 깊이 메시를 적용하던 경로에서 배경·고정 폰 면·누끼 피사체를 분리하는 경로로 변경했습니다. 피사체 안쪽은 원본 사진의 추정 깊이를 사용하고 투명 경계 바깥의 깊이만 확장합니다. 폰은 고정 면으로 유지하며 텍스처는 높은 정밀도와 밉맵 필터를 사용합니다. 이 변경은 비교 렌더와 데이터 보존 검사까지 확인했으며 Seeker의 실제 움직임 품질 재검증은 아직 완료하지 않았습니다.
+
+Apple 공식 문서의 ImagePresentationComponent.Spatial3DImage 공개 API는 visionOS 26.0 대상으로 표시되어 있습니다(https://developer.apple.com/documentation/realitykit/imagepresentationcomponent/spatial3dimage). Seeker Android에서 이 API를 호출하는 경로는 사용하지 않으며, 현재 구현은 자체 렌더러입니다.

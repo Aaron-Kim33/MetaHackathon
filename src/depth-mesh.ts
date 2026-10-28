@@ -1,4 +1,21 @@
-export type DepthFrame = { key: string; model: string; image: string; farImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[] };
+export type DepthSurface = { id: string; image: string; textureImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[]; baseZ: number; relief: number };
+export type DepthFrame = { key: string; model: string; image: string; farImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[]; layers?: DepthSurface[] };
+export function surfaceMesh(surface: DepthSurface) {
+  if (!Number.isFinite(surface.baseZ) || Math.abs(surface.baseZ) > 1 || !Number.isFinite(surface.relief) || surface.relief < 0 || surface.relief > 1) throw Error('입체 면의 깊이가 올바르지 않아요.');
+  depthMesh(surface as unknown as DepthFrame); // Validate dimensions and field.
+  const w = surface.relief ? surface.gridWidth : 2, h = surface.relief ? surface.gridHeight : 2;
+  const aspect = surface.width / surface.height, vertices = new Float32Array(w * h * 5), indices: number[] = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    const border = surface.id === 'backdrop' ? .08 : 0;
+    const u = x === 0 ? -border : x === w - 1 ? 1 + border : x / (w - 1);
+    const v = y === 0 ? -border : y === h - 1 ? 1 + border : y / (h - 1);
+    const z = surface.baseZ + (surface.relief ? surface.depth[i] / 255 - .5 : 0) * surface.relief;
+    vertices.set([(u * 2 - 1) * aspect * (3 - z) / 3, (1 - v * 2) * (3 - z) / 3, z, u, v], i * 5);
+  }
+  for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) { const a = y * w + x; indices.push(a,a+w,a+1,a+1,a+w,a+w+1); }
+  return { vertices, indices: new Uint16Array(indices), edges: [] };
+}
 // A depth map is inverse depth: bright pixels are closer. Reconstruct each ray
 // so that the neutral camera exactly reproduces the original photo.
 export function depthMesh(frame: DepthFrame) {
