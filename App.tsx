@@ -9,6 +9,8 @@ import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { PHOTO_FRAME_PRESET } from './src/frame-preset';
 import { DeviceMotion } from 'expo-sensors';
+import { spatialRendererAvailable } from './src/spatial-renderer';
+import type { DepthFrame } from './src/depth-mesh';
 import { cutoutTarget } from './src/cutout-target';
 import { PhotoLiftPicker } from './src/PhotoLiftPicker';
 import { deviceCutout, deviceCutoutAvailable } from './src/device-cutout';
@@ -58,6 +60,7 @@ function Editor() {
     return () => clearTimeout(timer);
   }, [cutoutNotice]);
   const [importPicking, setImportPicking] = useState(false);
+  const [depthFrame, setDepthFrame] = useState<DepthFrame | null>(null);
   const [spatialCalibration, setSpatialCalibration] = useState(0);
   const [compare, setCompare] = useState(false), [keyboardOpen, setKeyboardOpen] = useState(false);
   const [rootHeight, setRootHeight] = useState(viewport.height);
@@ -132,7 +135,7 @@ function Editor() {
     return () => clearTimeout(timer);
   }, [ready, view, draft, history, pendingJob, interacting]);
   const accept = (next: ProjectView) => {
-    setExportMessage('');
+    setExportMessage(''); setDepthFrame(null);
     const needsSelection = next.project.candidates.length > 1 && !next.project.selectedId;
     if (needsSelection) setActiveTool('subject');
     else if (view?.project.id !== next.project.id) setActiveTool(null);
@@ -211,15 +214,26 @@ function Editor() {
   const toggleSpatial = () => {
     if (!draft) return;
     if (draft.spatialEnabled) { render({ ...draft, spatialEnabled: false }); return; }
-    void task('기울기 미리보기를 준비하는 중', async () => {
+    void task('사진의 깊이를 분석하고 3D 화면을 준비하는 중', async () => {
+      if (!spatialRendererAvailable()) throw new Error('깊이 미리보기를 사용하려면 새 개발 앱(0.1.2)을 설치해 주세요. 저장된 작업은 유지돼요.');
       if (await AccessibilityInfo.isReduceMotionEnabled()) throw new Error('휴대폰 설정에서 동작 줄이기가 켜져 있어 기울기 효과가 꺼져 있어요.');
       if (!(await DeviceMotion.isAvailableAsync())) throw new Error('이 기기에서 기울기 센서를 사용할 수 없어요.');
       const permission = await DeviceMotion.requestPermissionsAsync();
       if (!permission.granted) throw new Error('기울기 미리보기를 사용하려면 설정에서 동작 센서 권한을 허용해 주세요.');
+      await savePendingOptions();
+      setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view!.project.id }));
       setActiveStickerId(null); setActiveTool(null); setSpatialCalibration(n => n + 1); render({ ...draft, spatialEnabled: true });
-      setMessage('휴대폰을 살짝 기울여 보세요. 편집으로 돌아가기를 누르면 이동·크기 조절로 돌아와요. 사진 저장은 정지 화면이에요.');
+      setMessage('사진의 깊이를 분석했어요. 천천히 좌우로 기울여 원근 변화를 확인하세요. 사진 저장은 정지 화면이에요.');
     });
   };
+  useEffect(() => {
+    if (!ready || !view || !draft?.spatialEnabled || depthFrame || busy) return;
+    if (!spatialRendererAvailable()) { setDraft({ ...draft, spatialEnabled: false }); setMessage('3D 깊이 보기는 새 개발 앱으로 업데이트한 뒤 사용해 주세요.'); return; }
+    void task('저장된 사진의 3D 깊이를 준비하는 중', async () => {
+      try { await savePendingOptions(); setDepthFrame(await request<DepthFrame>(connection, '/spatial', { projectId: view.project.id })); }
+      catch (error) { setDraft(current => current ? { ...current, spatialEnabled: false } : current); throw error; }
+    });
+  }, [ready, view?.project.id, draft?.spatialEnabled, depthFrame, busy]);
   const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
@@ -238,6 +252,7 @@ function Editor() {
   const render = (options: EditOptions, undo = false) => {
     if (!view) return;
     options = keepSceneVisible(rebaseOptions(options, view), view);
+    if (draft?.spatialEnabled && options.spatialEnabled && !sameOptions({ ...draft, spatialEnabled: false, spatialStrength: 0 }, { ...options, spatialEnabled: false, spatialStrength: 0 })) { options = { ...options, spatialEnabled: false }; setDepthFrame(null); }
     if (sameOptions(options, draft || view.options)) { if (undo) setHistory(current => current.slice(0, -1)); return; }
     setHistory(current => undo ? current.slice(0, -1) : [...current.slice(-19), draft || view.options]);
     setDraft(options); setExportMessage('');
@@ -403,7 +418,7 @@ function Editor() {
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
       <View style={[styles.canvasArea, maskOpen && { paddingTop: 12, paddingBottom: 12, paddingHorizontal: 12 }]}>
         {maskOpen && view ? (importPicking && maskTarget ? <PhotoLiftPicker key={editingAssetId} view={maskTarget} disabled={disabled || !!pendingJob} onLift={point => autoCut(point, editingAssetId)} onManual={() => { setImportPicking(false); setCutoutNotice(null); }} onClose={() => { setMaskOpen(false); setCutoutNotice(null); }} /> : <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} />) : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
-          {picking ? <SourcePicker key={selectionStickerId || view.project.sourceFile || view.project.id} onAutoCutout={point => autoCut(point, null, selectionStickerId)} view={selectionView || view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas onAutoCutout={autoCut} calibration={spatialCalibration} compact touchEnabled={!draft?.spatialEnabled} activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode !== 'sticker'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
+          {picking ? <SourcePicker key={selectionStickerId || view.project.sourceFile || view.project.id} onAutoCutout={point => autoCut(point, null, selectionStickerId)} view={selectionView || view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas depthFrame={depthFrame} onAutoCutout={autoCut} calibration={spatialCalibration} compact touchEnabled={!draft?.spatialEnabled} activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode !== 'sticker'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
           {stage.height > 320 && <Text style={styles.emptyMark}>↗</Text>}

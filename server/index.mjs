@@ -11,6 +11,7 @@ import { segment, generateDecoration } from './meta.mjs';
 import { COMPOSITION_VERSION } from '../src/composition-scene.ts';
 import { subjectShadow } from './subject-shadow.mjs';
 import { fixture } from './fixture.mjs';
+import { spatialBackdrop, spatialFrame } from './depth.mjs';
 import { deviceMaskCutout, refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds, makeHitMask } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -38,7 +39,7 @@ const stickerLabel = project => {
 };
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher } = {}) {
+export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher, depthEstimator } = {}) {
   const pairing = token || process.env.POPOUT_TOKEN || await localToken(root);
   insist(Object.values(caps).every(n => Number.isSafeInteger(n) && n >= 0), '호출 한도는 0 이상의 정수여야 해요.');
   const store = new Store(root), jobs = new ModelJobs(path.join(root, 'model-jobs.json'), caps);
@@ -105,6 +106,13 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         await store.save(project); send(200, await view(project.id)); return;
       }
       const project = await store.get(data.projectId);
+      if (url.pathname === '/spatial') {
+        const current = await view(project.id);
+        const photo = current.backgroundPhoto;
+        const backdrop = photo ? await spatialBackdrop(Buffer.from(photo.data, 'base64'), photo, current, current.options) : null;
+        const result = await spatialFrame(Buffer.from(current.image, 'base64'), root, depthEstimator, backdrop);
+        send(200, { ...result, projectId: project.id, options: current.options }); return;
+      }
       if (url.pathname === '/source/replace') {
         insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');
         insist(!jobs.active, 'AI 작업이 끝난 뒤 메인 사진을 변경해 주세요.', 409);

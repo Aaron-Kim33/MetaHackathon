@@ -1,5 +1,5 @@
-import React, { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
-import { Animated, StyleSheet, Text as NativeText, View } from 'react-native';
+import React, { forwardRef, lazy, Suspense, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
+import { ActivityIndicator, Animated, StyleSheet, Text as NativeText, View } from 'react-native';
 import Svg, { G, Rect, Circle, Ellipse, Path, Text, ClipPath, LinearGradient, RadialGradient, Stop, Defs } from 'react-native-svg';
 import type { EditOptions, ProjectView } from './client';
 import type { SceneNode } from './composition-scene';
@@ -10,6 +10,9 @@ import { backgroundPhotoRect, stickerRect } from './layout';
 import { orderedLayers } from './layer-order';
 import { useSpatialMotion } from './use-spatial-motion';
 import { spatialOffset } from './spatial-motion';
+
+const DepthSpatialCanvas = lazy(() => import('./DepthSpatialCanvas'));
+import type { DepthFrame } from './depth-mesh';
 
 type RectBox = { x: number; y: number; width: number; height: number };
 class ImagePose {
@@ -56,7 +59,7 @@ const PhoneChrome = memo(function PhoneChrome({ source, options }: { source: { w
 }, (a, b) => a.source.width === b.source.width && a.source.height === b.source.height && ['mode', 'ratio', 'frameScale', 'frameX', 'frameY', 'tilt', 'depth'].every(key => a.options[key as keyof EditOptions] === b.options[key as keyof EditOptions]));
 
 export type NativeCompositionHandle = { setPose: (options: EditOptions) => void };
-export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, { view: ProjectView; options: EditOptions; width: number; calibration?: number; dragging?: boolean }>(function NativeCompositionCanvas({ view, options, width, calibration = 0, dragging = false }, ref) {
+export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, { view: ProjectView; options: EditOptions; width: number; calibration?: number; dragging?: boolean; depthFrame?: DepthFrame | null }>(function NativeCompositionCanvas({ view, options, width, calibration = 0, dragging = false, depthFrame }, ref) {
   const plan = nativeCompositionPlan(view.project, options), unit = width / plan.width;
   const poses = useMemo(() => new Map<string, ImagePose>(), [view.project.id, unit]);
   const sources = useRef(new Map<string, { data: string; source: { uri: string } }>());
@@ -91,7 +94,7 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
   };
   useImperativeHandle(ref, () => ({ setPose: update }));
   useLayoutEffect(() => { if (!dragging) update(options); }, [options, view, unit, dragging]);
-  const motion = useSpatialMotion(!!options.spatialEnabled, calibration);
+  const motion = useSpatialMotion(false, calibration);
   const offset = (role: 'backdrop' | 'scene' | 'foreground' | 'sticker') => {
     const p = spatialOffset(role, motion, options.spatialStrength ?? .7);
     return [{ translateX: p.x * unit }, { translateY: p.y * unit }];
@@ -121,8 +124,9 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
   let background: React.ReactNode = null;
   if (backdrop && view.backgroundPhoto && options.mode !== 'sticker') {
     const r = backgroundPhotoRect(view.backgroundPhoto, plan, options), p = pose('background', view.backgroundPhoto, r);
-    background = <View style={[StyleSheet.absoluteFill, { transform: [...offset('backdrop'), { scale: options.spatialEnabled ? 1.12 : 1 }] }]}><Texture source={backdrop} pose={p} /></View>;
+    background = <View style={[StyleSheet.absoluteFill, { transform: [...offset('backdrop'), { scale: 1 }] }]}><Texture source={backdrop} pose={p} /></View>;
   }
+  if (options.spatialEnabled && depthFrame) return <Suspense fallback={<View style={[StyleSheet.absoluteFill, { backgroundColor: options.background }]} />}><DepthSpatialCanvas key={depthFrame.key} frame={depthFrame} strength={options.spatialStrength ?? .7} calibration={calibration} /></Suspense>;
   return <View pointerEvents="none" style={StyleSheet.absoluteFill}>
     {options.mode !== 'sticker' && <View style={[StyleSheet.absoluteFill, { backgroundColor: options.background }]} />}
     {background}{background && options.backgroundDim > 0 && <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: options.backgroundDim }]} />}
@@ -135,9 +139,6 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
       const item = view.stickers?.find(s => s.id === id), pixels = item && source(`sticker:${id}`, item.data), p = poses.get(id);
       return pixels && p ? <View key={id} style={[StyleSheet.absoluteFill, { transform: offset('sticker') }]}><Texture source={pixels} pose={p} /></View> : null;
     })}
-    {options.spatialEnabled && <View style={{ position: 'absolute', top: 12, left: 12, right: 72, borderRadius: 12, backgroundColor: '#19171FE8', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <View style={{ width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: '#8C80A0', alignItems: 'center', justifyContent: 'center' }}><View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: motion.status === 'active' ? '#ADFFD3' : '#F4C47D', transform: [{ translateX: motion.x * 10 }, { translateY: motion.y * 10 }] }} /></View>
-      <NativeText style={{ flex: 1, color: '#F1EAF7', fontSize: 11, lineHeight: 16 }}>{motion.status === 'active' ? (options.spatialStrength === 0 ? '효과 강도가 0이에요. 위치 → 그림자에서 강도를 높여 주세요.' : '기울기 연결됨 · 초록 점이 움직이는지 보세요.\n피사체는 폰보다 더 크게 움직여요.') : motion.status === 'denied' ? '동작 센서 권한이 꺼져 있어요.' : motion.status === 'reduced' ? '동작 줄이기 설정으로 효과가 꺼져 있어요.' : motion.status === 'unavailable' ? '이 기기에서 기울기 센서를 사용할 수 없어요.' : motion.status === 'error' ? '기울기 센서를 시작하지 못했어요. 편집으로 돌아갔다 다시 켜 주세요.' : '기울기 신호를 기다리는 중이에요.\n휴대폰을 천천히 좌우로 기울여 보세요.'}</NativeText>
-    </View>}
+    {options.spatialEnabled && <View style={{ position: 'absolute', top: 12, left: 12, right: 72, borderRadius: 12, backgroundColor: '#19171FE8', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 }}><ActivityIndicator color="#ADFFD3" /><NativeText style={{ flex: 1, color: '#F1EAF7', fontSize: 11 }}>사진의 깊이와 3D 화면을 준비하는 중이에요.</NativeText></View>}
   </View>;
 }));

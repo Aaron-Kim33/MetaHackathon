@@ -1,0 +1,11 @@
+import { pipeline, env } from '@huggingface/transformers';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+env.cacheDir = fileURLToPath(new URL('../.local/depth-model-cache/', import.meta.url));
+console.log('Depth Anything V2 Small 모델을 준비합니다. 사진을 외부로 보내지 않습니다.');
+const model = await pipeline('depth-estimation', 'onnx-community/depth-anything-v2-small', { dtype: 'fp32', device: 'cpu', revision: '4472b7362082ad9968fee890ca0f1e5aca36b93d', session_options: { intraOpNumThreads: 2 } });
+await model.dispose();
+const bytes = await readFile(new URL('../.local/depth-model-cache/onnx-community/depth-anything-v2-small/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model.onnx', import.meta.url));
+if (createHash('sha256').update(bytes).digest('hex') !== 'afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c') throw Error('깊이 모델 체크섬이 맞지 않아요.');
+console.log('깊이 모델 준비 완료 · CPU / SHA256 확인');

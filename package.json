@@ -1,6 +1,6 @@
 {
   "name": "reel-talk-popout",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Standalone pop-out photo editor developed during the Meta hackathon",
@@ -16,14 +16,17 @@
     "dev": "node scripts/dev.mjs",
     "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
     "share:android": "node scripts/share-android.mjs",
-    "setup:cutout": "node scripts/setup-cutout-model.mjs"
+    "setup:cutout": "node scripts/setup-cutout-model.mjs",
+    "setup:depth": "node scripts/setup-depth-model.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@meta-sam/parser": "0.1.0",
     "expo": "~58.0.17",
     "expo-constants": "~58.0.13",
     "expo-dev-client": "~58.0.16",
     "expo-file-system": "~58.0.10",
+    "expo-gl": "~58.0.3",
     "expo-image-picker": "~58.0.10",
     "expo-media-library": "~58.0.11",
     "expo-sensors": "~58.0.4",
