@@ -7,7 +7,7 @@ import { cropImageLayout } from './crop-layout';
 import { BrushStroke } from './layout';
 import { MeasuredBrush } from './brush';
 
-type Props = { visible: boolean; view: ProjectView; onClose: () => void; onApply: (strokes: BrushStroke[]) => Promise<void>; onReset: () => Promise<void>; outline?: boolean; embedded?: boolean };
+type Props = { onAutoCutout?: () => Promise<void>; visible: boolean; view: ProjectView; onClose: () => void; onApply: (strokes: BrushStroke[]) => Promise<void>; onReset: () => Promise<void>; outline?: boolean; embedded?: boolean };
 export function MaskEditor(props: Props) {
   const [slot, setSlot] = useState({ width: 300, height: 1 }), [radius, setRadius] = useState(0.025);
   const [strokes, setStrokes] = useState<BrushStroke[]>([]), [drawing, setDrawing] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -57,6 +57,7 @@ export function MaskEditor(props: Props) {
     finally { setBusy(false); }
   };
   const tool = (title: string, selected: boolean, onPress: () => void, disabled = false) => <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled: busy || drawing || disabled }} disabled={busy || drawing || disabled} onPress={onPress} style={[styles.button, props.embedded && { paddingHorizontal: 10, paddingVertical: 9 }, selected && styles.selected, (busy || drawing || disabled) && styles.disabled]}><Text style={[styles.label, selected && styles.selectedLabel]}>{title}</Text></Pressable>;
+  const autoCut = async () => { if (busy || !props.onAutoCutout) return; setBusy(true); setError(''); try { await props.onAutoCutout(); } catch (error) { setError(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'); } finally { setBusy(false); } };
   const endpoints = outline && strokes[0]?.points.length > 2 ? [strokes[0].points[0], strokes[0].points.at(-1)!] : null;
   const closing = endpoints ? { dx: (endpoints[1].x - endpoints[0].x) * image.width, dy: (endpoints[1].y - endpoints[0].y) * image.height } : null;
   const drawingCanvas = <View ref={canvas} collapsable={false} {...responder.panHandlers} style={{ width: '100%', height: image.height, backgroundColor: '#E6E0ED', borderRadius: 16, overflow: 'hidden' }}>
@@ -70,7 +71,7 @@ export function MaskEditor(props: Props) {
     </View>;
   const sizes = ([0.01, 0.025, 0.05] as const).map((value, i) => <React.Fragment key={value}>{tool(['작게', '중간', '크게'][i], radius === value, () => setRadius(value))}</React.Fragment>);
   const content = <View style={{ flex: 1, width: '100%', minHeight: 0, gap: 6 }}>
-    <View style={[styles.header, { flexShrink: 0, minHeight: 38 }]}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{outline ? '테두리로 자르기' : '지우개 보정'}</Text>{tool('닫기', false, props.onClose)}</View>
+    <View style={[styles.header, { flexShrink: 0, minHeight: 38 }]}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{outline ? '테두리로 자르기' : '지우개 보정'}</Text>{outline && props.onAutoCutout && tool(busy ? '분리 중…' : '자동 누끼', false, () => { void autoCut(); })}{tool('닫기', false, props.onClose)}</View>
     <View style={[styles.row, { flexShrink: 0, gap: 6 }]}>{outline ? <Text style={{ color: '#ddd', fontSize: 11, flex: 1 }}>남길 부분을 한 바퀴 그려 주세요. 끝점은 자동으로 이어져요.</Text> : sizes}{tool('↶', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
     <View style={{ flex: 1, minHeight: 0, width: '100%', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} onLayout={event => { const { width, height } = event.nativeEvent.layout; setSlot(current => current.width === width && current.height === height ? current : { width, height }); }}>
       {drawingCanvas}

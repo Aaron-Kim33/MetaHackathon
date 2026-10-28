@@ -1,0 +1,31 @@
+import { useEffect, useState } from 'react';
+import { AccessibilityInfo, AppState } from 'react-native';
+import { DeviceMotion } from 'expo-sensors';
+import { relativeMotion } from './spatial-motion';
+export function useSpatialMotion(enabled: boolean, calibration: number) {
+  const [point, setPoint] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    setPoint({ x: 0, y: 0 });
+    let disposed = false, generation = 0, subscription: ReturnType<typeof DeviceMotion.addListener> | undefined;
+    let origin: { beta: number; gamma: number } | null = null, previous = { x: 0, y: 0 };
+    const stop = () => { generation++; subscription?.remove(); subscription = undefined; origin = null; previous = { x: 0, y: 0 }; if (!disposed) setPoint(previous); };
+    const start = async () => {
+      const requested = ++generation;
+      if (!enabled || disposed || AppState.currentState !== 'active') return;
+      if (await AccessibilityInfo.isReduceMotionEnabled()) return;
+      if (!(await DeviceMotion.isAvailableAsync()) || !(await DeviceMotion.getPermissionsAsync()).granted || disposed || requested !== generation || AppState.currentState !== 'active') return;
+      DeviceMotion.setUpdateInterval(50);
+      subscription?.remove();
+      subscription = DeviceMotion.addListener(sample => {
+        if (disposed || !sample.rotation) return;
+        origin ||= sample.rotation;
+        previous = relativeMotion(sample.rotation, origin, previous); setPoint(previous);
+      });
+    };
+    void start().catch(() => {});
+    const state = AppState.addEventListener('change', next => { stop(); if (next === 'active') void start().catch(() => {}); });
+    const accessibility = AccessibilityInfo.addEventListener('reduceMotionChanged', reduced => { stop(); if (!reduced) void start().catch(() => {}); });
+    return () => { disposed = true; stop(); state.remove(); accessibility.remove(); };
+  }, [enabled, calibration]);
+  return enabled ? point : { x: 0, y: 0 };
+}

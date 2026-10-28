@@ -5,11 +5,41 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "ios": { "supportsTablet": true, "infoPlist": { "NSPhotoLibraryUsageDescription": "입체 콘텐츠로 만들 사진을 선택합니다.", "NSPhotoLibraryAddUsageDescription": "완성된 입체 사진을 앨범에 저장합니다.", "NSLocalNetworkUsageDescription": "개발용 사진 합성 서버에 연결합니다." } },
-    "android": { "usesCleartextTraffic": true },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "입체 콘텐츠로 만들 사진을 선택합니다.",
+        "NSPhotoLibraryAddUsageDescription": "완성된 입체 사진을 앨범에 저장합니다.",
+        "NSLocalNetworkUsageDescription": "개발용 사진 합성 서버에 연결합니다."
+      },
+      "bundleIdentifier": "app.reeltalk.popout"
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "package": "app.reeltalk.popout"
+    },
     "plugins": [
-      ["expo-image-picker", { "photosPermission": "입체 콘텐츠로 만들 사진을 선택합니다." }],
-      ["expo-media-library", { "photosPermission": "완성된 사진을 확인합니다.", "savePhotosPermission": "완성된 입체 사진을 저장합니다." }]
-    ]
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "입체 콘텐츠로 만들 사진을 선택합니다."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "완성된 사진을 확인합니다.",
+          "savePhotosPermission": "완성된 입체 사진을 저장합니다."
+        }
+      ],
+      [
+        "expo-sensors",
+        {
+          "motionPermission": "휴대폰 기울기에 맞춰 입체 미리보기를 움직입니다."
+        }
+      ],
+      "./plugins/with-subject-lift.cjs"
+    ],
+    "scheme": "popout"
   }
 }

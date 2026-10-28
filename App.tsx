@@ -8,6 +8,8 @@ import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { PHOTO_FRAME_PRESET } from './src/frame-preset';
+import { DeviceMotion } from 'expo-sensors';
+import { deviceCutout, deviceCutoutAvailable } from './src/device-cutout';
 import { COMPOSITION_VERSION } from './src/composition-scene';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
@@ -46,6 +48,8 @@ function Editor() {
   const [positionTab, setPositionTab] = useState<'move' | 'shadow' | 'ratio'>('move');
   const [decorationTab, setDecorationTab] = useState<'create' | 'place'>('create');
   const [moreTab, setMoreTab] = useState<'settings' | 'jobs'>(initialConnection.token ? 'jobs' : 'settings');
+  const [deviceCutoutError, setDeviceCutoutError] = useState('');
+  const [spatialCalibration, setSpatialCalibration] = useState(0);
   const [compare, setCompare] = useState(false), [keyboardOpen, setKeyboardOpen] = useState(false);
   const [rootHeight, setRootHeight] = useState(viewport.height);
   const [stage, setStage] = useState({ width: viewport.width, height: Math.max(0, viewport.height - 146) });
@@ -96,6 +100,9 @@ function Editor() {
   useEffect(() => {
     alive.current = true;
     restore().then(async snapshot => {
+      if (!snapshot?.view && initialConnection.token) {
+        try { snapshot = (await request<{ snapshot: Snapshot | null }>(initialConnection, '/editor-state')).snapshot; } catch { /* A new/offline install can start empty. */ }
+      }
       if (snapshot?.view) {
         try { const remote = await request<ProjectView>(initialConnection, `/projects/${snapshot.view.project.id}`); snapshot = { ...snapshot, view: remote, draft: keepSceneVisible(rebaseOptions(snapshot.draft || remote.options, remote), remote) }; } catch { /* Keep the last device draft when offline. */ }
       }
@@ -106,7 +113,11 @@ function Editor() {
   }, []);
   useEffect(() => {
     if (!ready || interacting) return;
-    const timer = setTimeout(() => { setSaveState('저장 중'); persist(latestSnapshot.current).then(() => setSaveState('기기에 보관됨')).catch(() => setSaveState('기기 저장 실패 · 저장 공간 확인')); }, 1200);
+    const timer = setTimeout(() => {
+      const snapshot = latestSnapshot.current;
+      setSaveState('저장 중'); persist(snapshot).then(() => setSaveState('기기에 보관됨')).catch(() => setSaveState('기기 저장 실패 · 저장 공간 확인'));
+      if (snapshot.view) void request(connection, '/editor-state', { projectId: snapshot.view.project.id, pendingJob: snapshot.pendingJob }).catch(() => {});
+    }, 1200);
     return () => clearTimeout(timer);
   }, [ready, view, draft, history, pendingJob, interacting]);
   const accept = (next: ProjectView) => {
@@ -168,6 +179,33 @@ function Editor() {
       setHistory([]); setMessage('배경 사진을 지웠어요. 선택한 배경색을 사용해요.');
     });
   };
+  const cutOnDevice = async (selectedPoint: { x: number; y: number } | null = null, assetId: string | null = null) => {
+    if (!view || lock.current) return;
+    if (pendingJob) throw new Error('앞선 AI 작업이 끝난 뒤 자동 분리해 주세요.');
+    lock.current = true; setDeviceCutoutError(''); setBusy('기기에서 피사체를 분리하는 중'); setMessage('기기에서 자동 분리 중이에요. 첫 실행은 모델 준비에 시간이 걸릴 수 있어요.');
+    try {
+      await previewFlight.current; await savePendingOptions();
+      const source = assetId ? view.pendingPhoto?.id === assetId ? view.pendingPhoto.source : null : view.source;
+      if (!source) throw new Error('가져온 사진이 변경됐어요. 다시 열어 주세요.');
+      const result = await deviceCutout(source, selectedPoint);
+      const next = await request<ProjectView>(connection, '/cutout/device', { projectId: view.project.id, assetId, sourceFile: view.project.sourceFile || 'source.png', baseRevision: view.project.maskRevision || 0, ...result });
+      accept(next); setHistory([]); setMaskOpen(false); setPicking(false);
+      setActiveStickerId(assetId ? next.stickers?.at(-1)?.id || 'primary' : 'primary');
+      setMessage('기기 자동 누끼를 적용했어요. Meta 호출 없이 분리했으며 기존 스티커와 배경은 유지돼요.');
+    } catch (error) { setDeviceCutoutError(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'); throw error; } finally { lock.current = false; setBusy(''); }
+  };
+  const autoCut = (point: { x: number; y: number } | null = null, assetId: string | null = null) => { void cutOnDevice(point, assetId).catch(error => setMessage(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.')); };
+  const toggleSpatial = () => {
+    if (!draft) return;
+    if (draft.spatialEnabled) { render({ ...draft, spatialEnabled: false }); return; }
+    void task('입체 미리보기를 준비하는 중', async () => {
+      if (!(await DeviceMotion.isAvailableAsync())) throw new Error('이 기기에서 기울기 센서를 사용할 수 없어요.');
+      const permission = await DeviceMotion.requestPermissionsAsync();
+      if (!permission.granted) throw new Error('입체 미리보기를 사용하려면 설정에서 동작 센서 권한을 허용해 주세요.');
+      setActiveStickerId(null); setActiveTool(null); setSpatialCalibration(n => n + 1); render({ ...draft, spatialEnabled: true });
+      setMessage('휴대폰을 살짝 기울여 보세요. 편집하기를 누르면 이동·크기 조절로 돌아와요. 사진 저장은 정지 화면이에요.');
+    });
+  };
   const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
@@ -178,6 +216,7 @@ function Editor() {
         const id = jobId(); setPendingJob(id);
         // Save the request ID before sending: a disconnect must not lose deduplication identity.
         await persist({ view: working, draft, history, activeStickerId, pendingJob: id }, true);
+        await request(connection, '/editor-state', { projectId: working.project.id, pendingJob: id });
         const next = await request<ProjectView>(connection, endpoint, { projectId: view.project.id, jobId: id, ...extra });
         accept(next); if ('assetId' in extra) setActiveStickerId(next.stickers?.at(-1)?.id || null); setPendingJob(null); setMessage(endpoint === '/decoration' ? '장식이 생성됐어요. 배경 분리를 눌러 편집 가능한 장식으로 만드세요.' : '분리를 완료했어요. 결과를 확인하고 조절해 주세요.');
     });
@@ -332,14 +371,15 @@ function Editor() {
 
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
       <View style={[styles.canvasArea, maskOpen && { paddingTop: 12, paddingBottom: 12, paddingHorizontal: 12 }]}>
-        {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
-          {picking ? <SourcePicker view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas compact touchEnabled activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
+        {maskOpen && view ? <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded onAutoCutout={outlineOpen ? () => cutOnDevice(null, editingAssetId) : undefined} outline={outlineOpen} visible view={maskTarget || view} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} /> : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
+          {picking ? <SourcePicker onAutoCutout={autoCut} view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas onAutoCutout={autoCut} calibration={spatialCalibration} compact touchEnabled={!draft?.spatialEnabled} activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
           {stage.height > 320 && <Text style={styles.emptyMark}>↗</Text>}
           {stage.height > 180 && <><Text style={styles.emptyTitle}>사진 한 장,{ '\n' }내 스타일로.</Text>{stage.height > 280 && <Text style={styles.emptyHint}>AI 피사체 분리 · 장식 · 테마 편집</Text>}<Button title="사진 선택" disabled={disabled} onPress={choosePhoto} /><Pressable accessibilityRole="button" onPress={useFixture} disabled={disabled} style={styles.sampleLink}><Text style={styles.sampleText}>연습용 그림으로 시작</Text></Pressable></>}
         </View>}
       </View>
+      {view && draft && !maskOpen && !interacting && <View style={{ position: 'absolute', left: 12, bottom: 78, zIndex: 70, flexDirection: 'row', gap: 6 }}><Button title={draft.spatialEnabled ? '편집하기' : '입체 보기'} secondary disabled={disabled} onPress={toggleSpatial} />{draft.spatialEnabled && <Button title="중심 맞추기" secondary disabled={disabled} onPress={() => setSpatialCalibration(n => n + 1)} />}</View>}
       {view && !maskOpen && !interacting && <Pressable accessibilityRole="button" accessibilityLabel="배경 사진 설정" disabled={disabled} onPress={() => { setActiveTool('background'); setThemeTab('background'); }} style={{ position: 'absolute', left: 12, top: draft?.mode === 'frame' ? 114 : 72, zIndex: 70, backgroundColor: '#302D38DD', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 }}><Text style={{ color: '#fff', fontSize: 11 }}>배경 사진</Text></Pressable>}
       {view && draft?.mode === 'frame' && !maskOpen && !interacting && <Pressable accessibilityRole="button" accessibilityLabel="폰 팝아웃 메인 사진 변경" disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} style={{ position: 'absolute', left: 12, top: 72, zIndex: 70, backgroundColor: '#302D38DD', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, opacity: disabled || pendingJob ? 0.35 : 1 }}><Text style={{ color: '#fff', fontSize: 11 }}>메인 사진 변경</Text></Pressable>}
       {trashState.visible && !maskOpen && <DragTrash over={trashState.over} right={canvasSize.railWidth + 10} onBounds={setTrashBounds} />}
@@ -366,6 +406,7 @@ function Editor() {
         </>}
         {activeTool === 'subject' && view && <>
           {layerPicker}
+          <Button title={busy === '기기에서 피사체를 분리하는 중' ? '자동 분리 중…' : '기기에서 자동 누끼'} disabled={disabled || !!pendingJob} onPress={() => autoCut()} /><Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? '사진을 꾹 누르면 누른 피사체를 자동으로 분리해요.' : '기기 자동 누끼는 설치형 개발 빌드에서 사용해요.')}</Text>
           <Button title="테두리로 자르기" disabled={disabled} onPress={() => openMask(true)} />
           <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
           <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
@@ -377,7 +418,7 @@ function Editor() {
           {layerPicker}
           {positionTab === 'move' && activeTransform && <><Stepper title="선택 스티커 크기" value={activeTransform.scale} step={0.05} min={0.08} max={2.5} disabled={disabled} onChange={value => changeSticker('scale', value)} /><Stepper title="선택 스티커 좌우" value={activeTransform.x} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('x', value)} /><Stepper title="선택 스티커 상하" value={activeTransform.y} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('y', value)} /></>}
           {positionTab === 'move' && activeStickerId === 'primary' && <><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Text style={styles.help}>사진 위에서 드래그·핀치로 바로 조절할 수도 있어요.</Text></>}
-          {positionTab === 'shadow' && <><Stepper title="그림자 진하기" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} />{draft.mode === 'frame' && <><Stepper title="폰 기울기" unit="degrees" value={draft.tilt || 0} step={2} min={-18} max={18} disabled={disabled} onChange={value => change('tilt', value)} /><Stepper title="폰 크기" value={draft.frameScale ?? 1} step={0.05} min={0.7} max={1.5} disabled={disabled} onChange={value => change('frameScale', value)} /><Stepper title="폰 좌우" value={draft.frameX ?? 0} step={0.03} min={-0.35} max={0.35} disabled={disabled} onChange={value => change('frameX', value)} /><Stepper title="폰 상하" value={draft.frameY ?? 0} step={0.03} min={-0.25} max={0.25} disabled={disabled} onChange={value => change('frameY', value)} /><Stepper title="프레임 깊이" value={draft.depth ?? 0.75} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('depth', value)} /></>}<Text style={styles.help}>기울기·두께와 피사체 그림자는 폰 팝아웃에 적용돼요.</Text></>}
+          {positionTab === 'shadow' && <><Stepper title="그림자 진하기" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} />{draft.mode === 'frame' && <><Stepper title="폰 기울기" unit="degrees" value={draft.tilt || 0} step={2} min={-18} max={18} disabled={disabled} onChange={value => change('tilt', value)} /><Stepper title="폰 크기" value={draft.frameScale ?? 1} step={0.05} min={0.7} max={1.5} disabled={disabled} onChange={value => change('frameScale', value)} /><Stepper title="폰 좌우" value={draft.frameX ?? 0} step={0.03} min={-0.35} max={0.35} disabled={disabled} onChange={value => change('frameX', value)} /><Stepper title="폰 상하" value={draft.frameY ?? 0} step={0.03} min={-0.25} max={0.25} disabled={disabled} onChange={value => change('frameY', value)} /><Stepper title="프레임 깊이" value={draft.depth ?? 0.75} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('depth', value)} /></>}<Stepper title="기울기 효과 강도" value={draft.spatialStrength ?? 0.7} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('spatialStrength', value)} /><Text style={styles.help}>입체 보기는 배경·사진·스티커를 서로 다른 깊이로 움직여요. Apple 공간 장면 API가 아닌 앱 자체 효과이며, PNG 저장은 정지 화면이에요.</Text></>}
           {positionTab === 'ratio' && <><View style={styles.row}>{(['portrait', 'story', 'square'] as const).map((ratio, i) => <View style={styles.grow} key={ratio}><Button title={['4:5', '9:16', '1:1'][i]} secondary selected={draft.ratio === ratio} disabled={disabled} onPress={() => change('ratio', ratio)} /></View>)}</View><Text style={styles.help}>비율을 바꾼 뒤 사진 위치와 잘리는 부분을 확인하세요.</Text></>}
         </>}
         {activeTool === 'background' && draft && themeTab === 'theme' && <>

@@ -81,3 +81,17 @@ export async function refineMask(source, cutout, input) {
   const rgb = await sharp(source).removeAlpha().png().toBuffer();
   return sharp(rgb).joinChannel(alpha, { raw: { width, height, channels: 1 } }).png().toBuffer();
 }
+
+// Device APIs return a full-resolution grayscale confidence mask, never replacement RGB.
+export async function deviceMaskCutout(source, bytes) {
+  const a = await sharp(source).metadata(), b = await sharp(bytes, { limitInputPixels: 1600 * 1600 }).metadata();
+  insist(b.format === 'png' && b.width === a.width && b.height === a.height, '자동 누끼 크기가 원본 사진과 달라요. 다시 시도해 주세요.');
+  const alpha = await sharp(bytes).removeAlpha().greyscale().raw().toBuffer();
+  if (a.hasAlpha) {
+    const original = await sharp(source).extractChannel('alpha').raw().toBuffer();
+    for (let i = 0; i < alpha.length; i++) alpha[i] = Math.round(alpha[i] * original[i] / 255);
+  }
+  insist(alpha.some(value => value > 8), '사진에서 피사체를 찾지 못했어요.');
+  const rgb = await sharp(source).removeAlpha().png().toBuffer();
+  return sharp(rgb).joinChannel(alpha, { raw: { width: a.width, height: a.height, channels: 1 } }).png().toBuffer();
+}

@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
 export type EditOptions = {
+  spatialEnabled: boolean; spatialStrength: number;
   frameScale: number; frameX: number; frameY: number;
   backgroundZoom: number; backgroundX: number; backgroundY: number; backgroundDim: number;
   layerOrder: string[];
@@ -14,7 +15,7 @@ export type EditOptions = {
 export type Usage = { sam: { reserved: number; cap: number }; image: { reserved: number; cap: number } };
 export type ProjectView = {
   project: {
-    id: string; createdAt: string; width: number; height: number; provenance: string; selectedId: string | null;
+    sourceFile?: string; id: string; createdAt: string; width: number; height: number; provenance: string; selectedId: string | null;
     candidates: { id: string; label: string; provider: string; box?: { left: number; top: number; right: number; bottom: number } }[];
     decoration: boolean; decorationPending?: { prompt: string } | null;
     maskRevision?: number;

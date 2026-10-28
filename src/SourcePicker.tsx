@@ -4,13 +4,21 @@ import type { ProjectView } from './client';
 import { pageImagePoint } from './layout';
 import type { BrushPoint } from './layout';
 
-type Props = { view: ProjectView; point: BrushPoint | null; onPoint: (point: BrushPoint) => void; disabled: boolean };
+type Props = { onAutoCutout?: (point: BrushPoint) => void; view: ProjectView; point: BrushPoint | null; onPoint: (point: BrushPoint) => void; disabled: boolean };
 export function SourcePicker(props: Props) {
   const canvas = useRef<React.ComponentRef<typeof View>>(null), current = useRef(props);
   current.current = props;
   const [width, setWidth] = useState(300);
   const height = width * props.view.project.height / props.view.project.width;
-  return <Pressable ref={canvas} collapsable={false} disabled={props.disabled} accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onLayout={event => setWidth(event.nativeEvent.layout.width)} onPress={event => {
+  return <Pressable ref={canvas} collapsable={false} disabled={props.disabled} accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onLayout={event => setWidth(event.nativeEvent.layout.width)} delayLongPress={600} onLongPress={event => {
+    const { pageX: touchX, pageY: touchY } = event.nativeEvent;
+    const project = current.current.view.project;
+    canvas.current?.measure((_x, _y, width, height, pageX, pageY) => {
+      if (current.current.view.project.id !== project.id) return;
+      const point = pageImagePoint(touchX, touchY, { pageX, pageY, width, height }, project);
+      if (point) current.current.onAutoCutout?.(point);
+    });
+  }} onPress={event => {
     const { pageX: touchX, pageY: touchY } = event.nativeEvent;
     const project = current.current.view.project;
     canvas.current?.measure((_x, _y, measuredWidth, measuredHeight, pageX, pageY) => {

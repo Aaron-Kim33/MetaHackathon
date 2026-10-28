@@ -1,0 +1,74 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import sharp from 'sharp';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import path from 'node:path';
+import { createApp } from '../server/index.mjs';
+import { deviceMaskCutout } from '../server/mask.mjs';
+import { compose } from '../server/composition.mjs';
+import { HoldCutout } from '../src/hold-cutout.ts';
+import { relativeMotion, spatialOffset } from '../src/spatial-motion.ts';
+const image = (color, width = 80, height = 120) => sharp({ create: { width, height, channels: 3, background: color } }).png().toBuffer();
+const mask = (width = 80, height = 120) => sharp(Buffer.from(`<svg width="${width}" height="${height}"><rect width="100%" height="100%" fill="black"/><rect x="10" y="10" width="40" height="50" fill="white"/></svg>`)).png().toBuffer();
+test('device confidence masks preserve original RGB and reject empty or mismatched masks', async () => {
+  const source = await image('#ff0000');
+  const cutout = await deviceMaskCutout(source, await mask());
+  const raw = await sharp(cutout).raw().toBuffer();
+  assert.deepEqual([...raw.subarray((20 * 80 + 20) * 4, (20 * 80 + 20) * 4 + 4)], [255, 0, 0, 255]);
+  assert.equal(raw[3], 0);
+  await assert.rejects(deviceMaskCutout(source, await mask(40, 50)));
+  await assert.rejects(deviceMaskCutout(source, await image('#000000')));
+  const transparent = await sharp({ create: { width: 80, height: 120, channels: 4, background: '#00000000' } }).png().toBuffer();
+  await assert.rejects(deviceMaskCutout(transparent, await mask()), 'segmentation must not resurrect originally transparent pixels');
+});
+test('device masks apply to main and additional photos without changing theme, existing stickers or model usage', async t => {
+  await mkdir('.local/tests', { recursive: true });
+  const app = await createApp({ root: await mkdtemp(path.resolve('.local/tests/device-')), token: 'device', key: '', caps: { sam: 0, image: 0 } });
+  await new Promise(r => app.server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => app.server.close(r)));
+  const send = async (route, data) => { const r = await fetch(`http://127.0.0.1:${app.server.address().port}${route}`, { method: 'POST', headers: { Authorization: 'Bearer device', 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); return { status: r.status, ...await r.json() }; };
+  const post = async (route, data) => { const v = await send(route, data); assert.equal(v.status, 200, v.error); return v; };
+  const initial = await post('/projects', { image: (await image('#ff0000')).toString('base64') }), projectId = initial.project.id;
+  const args = { projectId, sourceFile: initial.project.sourceFile, baseRevision: 0, provider: 'android-mlkit', mask: (await mask()).toString('base64') };
+  app.jobs.active = true; assert.equal((await send('/cutout/device', args)).status, 409); app.jobs.active = false;
+  const first = await post('/cutout/device', args);
+  assert.equal(first.options.mode, 'plain'); assert.equal(first.project.candidates[0].provider, 'android-mlkit'); assert.ok(first.subject);
+  assert.equal((await send('/cutout/device', args)).status, 409, 'old results never replace newer masks');
+  const imported = await post('/imports', { projectId, image: (await image('#0000ff')).toString('base64') });
+  const extra = await post('/cutout/device', { ...args, assetId: imported.pendingPhoto.id, provider: 'apple-vision' });
+  assert.equal(extra.stickers.length, 1); assert.equal(extra.subject, first.subject); assert.equal(extra.pendingPhoto, null); assert.equal(extra.options.mode, 'plain');
+  const imported2 = await post('/imports', { projectId, image: (await image('#00ff00')).toString('base64') });
+  const extra2 = await post('/cutout/device', { ...args, assetId: imported2.pendingPhoto.id });
+  assert.equal(extra2.stickers.length, 2); assert.deepEqual(extra2.stickers[0], extra.stickers[0]); assert.equal(extra2.subject, first.subject);
+  const persisted = await app.store.get(projectId); assert.equal(persisted.stickers[0].provider, 'apple-vision');
+  await post('/editor-state', { projectId, pendingJob: '11111111-1111-4111-8111-111111111111' });
+  const session = await fetch(`http://127.0.0.1:${app.server.address().port}/editor-state`, { headers: { Authorization: 'Bearer device' } }).then(r => r.json());
+  assert.equal(session.snapshot.view.project.id, projectId); assert.equal(session.snapshot.view.subject, first.subject);
+  assert.equal(session.snapshot.view.stickers.length, 2); assert.equal(session.snapshot.pendingJob, '11111111-1111-4111-8111-111111111111');
+  await post('/source/replace', { projectId, image: (await image('#ffffff')).toString('base64') });
+  assert.equal((await send('/cutout/device', { ...args, baseRevision: 1 })).status, 409);
+  assert.equal((await send('/cutout/device', { ...args, provider: 'meta-sam' })).status, 400);
+  assert.equal(app.jobs.usage().sam.reserved, 0); assert.equal(app.jobs.usage().image.reserved, 0);
+});
+test('hold cutout fires once and cancels on drag, pinch, release, or unmount', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let fired = 0; const hold = new HoldCutout(() => fired++);
+  hold.start(); t.mock.timers.tick(599); assert.equal(fired, 0); t.mock.timers.tick(1); assert.equal(fired, 1); t.mock.timers.tick(1000); assert.equal(fired, 1);
+  for (const cancel of [() => hold.move(6, 0, 1), () => hold.move(0, 0, 2), () => hold.cancel()]) { hold.start(); cancel(); t.mock.timers.tick(1000); assert.equal(fired, 1); }
+  hold.start(); hold.move(1, 1, 1); t.mock.timers.tick(600); assert.equal(fired, 2);
+});
+test('parallax calibrates to neutral, smooths and clamps tilt, and handles wrap-around and invalid samples', () => {
+  const origin = { beta: 1, gamma: 0 };
+  assert.deepEqual(relativeMotion(origin, origin, { x: 0, y: 0 }), { x: 0, y: 0 });
+  let p = { x: 0, y: 0 }; for (let i = 0; i < 100; i++) p = relativeMotion({ beta: 2, gamma: 2 }, origin, p);
+  assert.ok(p.x > .99 && p.x <= 1 && p.y <= 1);
+  assert.deepEqual(relativeMotion({ beta: NaN, gamma: 0 }, origin, p), p);
+  const wrapped = relativeMotion({ beta: -Math.PI + .01, gamma: 0 }, { beta: Math.PI - .01, gamma: 0 }, { x: 0, y: 0 }); assert.ok(Math.abs(wrapped.y) < .02);
+  assert.ok(spatialOffset('backdrop', p, 1).x < 0); assert.ok(spatialOffset('sticker', p, 1).x > spatialOffset('scene', p, 1).x);
+  assert.deepEqual(spatialOffset('scene', p, 0), { x: 0, y: 0 });
+});
+test('motion preview settings never alter the static exported composition', async () => {
+  const source = await image('#ffffff');
+  const a = await compose({ source, options: { mode: 'plain', spatialEnabled: false } });
+  const b = await compose({ source, options: { mode: 'plain', spatialEnabled: true, spatialStrength: 1 } });
+  assert.deepEqual(a.bytes, b.bytes);
+});

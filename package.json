@@ -12,15 +12,20 @@
     "check:model": "node scripts/check-model.mjs",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "fixture": "node scripts/fixture.mjs"
+    "fixture": "node scripts/fixture.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
+    "share:android": "node scripts/share-android.mjs"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",
     "expo": "~58.0.17",
     "expo-constants": "~58.0.13",
+    "expo-dev-client": "~58.0.16",
     "expo-file-system": "~58.0.10",
     "expo-image-picker": "~58.0.10",
     "expo-media-library": "~58.0.11",
+    "expo-sensors": "~58.0.4",
     "expo-sharing": "~58.0.20",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",

@@ -4,6 +4,8 @@ import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
 import { CachedImage } from './CachedImage';
 import { CompositionCanvas } from './CompositionCanvas';
+import { HoldCutout } from './hold-cutout';
+import { unprojectFrame } from './frame';
 import { meaningfulGesture } from './edit-performance';
 import { orderedLayers } from './layer-order';
 import { MeasuredCanvasTouch } from './canvas-touch';
@@ -14,7 +16,7 @@ import { DragDelete } from './drag-delete';
 import type { TrashBounds, TrashState } from './drag-delete';
 import { gesturePhoto, gestureSticker, stickerRect, photoLayout } from './layout';
 
-type Props = { view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void; trashBounds?: TrashBounds | null; onTrashState?: (state: TrashState) => void; onDropDelete?: (id: string, options: EditOptions) => void; onReorder?: (id: string, direction: 'front' | 'back') => void };
+type Props = { onAutoCutout?: (point: { x: number; y: number }) => void; calibration?: number; view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void; trashBounds?: TrashBounds | null; onTrashState?: (state: TrashState) => void; onDropDelete?: (id: string, options: EditOptions) => void; onReorder?: (id: string, direction: 'front' | 'back') => void };
 function touchState(event: GestureResponderEvent) {
   const touches = event.nativeEvent.touches;
   const first = touches[0] || event.nativeEvent, second = touches[1];
@@ -43,10 +45,23 @@ export function GestureCanvas(props: Props) {
     if (touch && deletion.current) current.current.onTrashState?.(deletion.current.move({ x: touch.x, y: touch.y }, touch.count, props.trashBounds || null));
   }, [props.trashBounds]);
   const base = useRef<{ touch: ReturnType<typeof touchState>; options: EditOptions; anchorX: number; anchorY: number; stickerId: string | null } | null>(null);
+  const hold = useRef<HoldCutout | null>(null);
+  const holdFired = useRef(false);
+  useEffect(() => () => hold.current?.cancel(), []);
   const begin = (touch: LocalCanvasTouch) => {
     current.current.width = touch.displayWidth;
+    hold.current?.cancel(); holdFired.current = false;
     dragTouch.current = touch; latest.current = null;
     const id = hitLayer(current.current.view, current.current.options, { x: touch.localX, y: touch.localY }, touch.displayWidth);
+    const g = photoLayout(current.current.view.project, current.current.options), unit = g.width / touch.displayWidth;
+    const p = unprojectFrame({ x: touch.localX * unit, y: touch.localY * unit }, g, current.current.options);
+    const point = { x: (p.x - g.photo.x) / g.photo.width, y: (p.y - g.photo.y) / g.photo.height };
+    const inScreen = p.x >= g.screen.x && p.x <= g.screen.x + g.screen.width && p.y >= g.screen.y && p.y <= g.screen.y + g.screen.height;
+    const onPhoto = point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1 && (id === 'primary' || (!current.current.view.subject && (current.current.options.mode === 'plain' || inScreen)));
+    if (touch.count === 1 && onPhoto && (!id || id === 'primary') && current.current.onAutoCutout) {
+      hold.current = new HoldCutout(() => { holdFired.current = true; base.current = null; deletion.current?.cancel(); deletion.current = null; current.current.onAutoCutout?.(point); });
+      hold.current.start();
+    }
     current.current.onSelectSticker?.(id);
     current.current.trashBounds = null;
     if (!id) { base.current = null; deletion.current = null; return; }
@@ -55,7 +70,9 @@ export function GestureCanvas(props: Props) {
     base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: id === 'primary' ? null : id };
   };
   const move = (touch: LocalCanvasTouch) => {
-    if (!base.current || !touch.count) return;
+    const start = dragTouch.current;
+    if (start) hold.current?.move(touch.x - start.x, touch.y - start.y, touch.count);
+    if (holdFired.current || !base.current || !touch.count) return;
     const previous = base.current;
       dragTouch.current = touch;
       const trash = deletion.current?.move({ x: touch.x, y: touch.y }, touch.count, current.current.trashBounds || null);
@@ -70,6 +87,7 @@ export function GestureCanvas(props: Props) {
         anchorX: previous.anchorX, anchorY: previous.anchorY,
       };
       if (!latest.current && !meaningfulGesture(gesture.dx, gesture.dy, gesture.factor)) return;
+      hold.current?.cancel();
       if (!latest.current) current.current.onInteracting(true);
       let options: EditOptions;
       if (previous.stickerId) {
@@ -81,6 +99,7 @@ export function GestureCanvas(props: Props) {
       latest.current = options; setLive(options);
   };
   const end = (touch: LocalCanvasTouch) => {
+    hold.current?.cancel();
     measured.current = null;
       const result = latest.current;
       const dropId = deletion.current?.release({ x: touch.x, y: touch.y }, current.current.trashBounds || null);
@@ -107,7 +126,7 @@ export function GestureCanvas(props: Props) {
     },
     onPanResponderMove: event => measured.current?.move(touchState(event)),
     onPanResponderRelease: event => measured.current?.end(touchState(event)),
-    onPanResponderTerminate: () => { measured.current?.cancel(); measured.current = null; deletion.current?.cancel(); deletion.current = null; dragTouch.current = null; base.current = null; latest.current = null; setLive(null); current.current.onInteracting(false); current.current.onTrashState?.({ visible: false, over: false }); },
+    onPanResponderTerminate: () => { hold.current?.cancel(); measured.current?.cancel(); measured.current = null; deletion.current?.cancel(); deletion.current = null; dragTouch.current = null; base.current = null; latest.current = null; setLive(null); current.current.onInteracting(false); current.current.onTrashState?.({ visible: false, over: false }); },
     onPanResponderTerminationRequest: () => false,
   }), []);
   const options = live || props.options, layout = photoLayout(props.view.project, options), scale = width / layout.width;
@@ -127,7 +146,7 @@ export function GestureCanvas(props: Props) {
     {!props.compact && <View style={styles.toolbar}><Pressable disabled={props.disabled} onPress={() => setEnabled(!enabled)} style={styles.tool}><Text style={styles.label}>터치 조절</Text></Pressable><Pressable disabled={props.disabled} onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} style={styles.tool}><Text style={styles.label}>누르고 원본 보기</Text></Pressable></View>}
     <View ref={nativeCanvas} collapsable={false} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {options.mode === 'sticker' && !compare && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#F4F1F7' }]}>{Array.from({ length: 6 * Math.ceil(layout.height / layout.width * 6) }, (_, i) => <View key={i} style={{ width: width / 6, height: width / 6, backgroundColor: (Math.floor(i / 6) + i % 6) % 2 ? '#E0DCE7' : '#F4F1F7' }} />)}</View>}
-      {compare ? <CachedImage pointerEvents="none" data={props.view.source} style={StyleSheet.absoluteFill} resizeMode="contain" /> : <CompositionCanvas view={props.view} options={options} />}
+      {compare ? <CachedImage pointerEvents="none" data={props.view.source} style={StyleSheet.absoluteFill} resizeMode="contain" /> : <CompositionCanvas view={props.view} options={options} calibration={props.calibration} />}
       {selectedRect && !compare && <View pointerEvents="none" style={{ position: 'absolute', left: selectedRect.x * scale, top: selectedRect.y * scale, width: selectedRect.width * scale, height: selectedRect.height * scale, zIndex: 100, borderWidth: 1.5, borderColor: '#A58ADC', borderStyle: 'dashed' }} />}
       {selectedRect && width >= 96 && visibleOrder.length > 1 && !live && !compare && props.onReorder && <View onStartShouldSetResponder={() => true} style={{ position: 'absolute', left: Math.max(5, Math.min(width - 89, selectedRect.x * scale)), top: Math.max(5, Math.min(layout.height * scale - 39, selectedRect.y * scale - 40)), zIndex: 200, flexDirection: 'row', gap: 3, backgroundColor: '#282131EE', padding: 3, borderRadius: 12 }}>
         {(['back', 'front'] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={direction === 'front' ? '레이어 한 단계 앞으로' : '레이어 한 단계 뒤로'} disabled={props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0)} onPress={() => props.onReorder?.(activeKey!, direction)} style={{ width: 36, height: 30, justifyContent: 'center', alignItems: 'center', opacity: props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0) ? 0.3 : 1 }}><Text style={{ color: '#fff', fontSize: 13 }}>{direction === 'front' ? '↑ 앞' : '↓ 뒤'}</Text></Pressable>)}

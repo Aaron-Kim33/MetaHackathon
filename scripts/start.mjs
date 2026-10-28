@@ -37,7 +37,7 @@ const require = createRequire(import.meta.url);
 const expoCli = require.resolve('expo/bin/cli');
 const env = { ...process.env, POPOUT_LOCAL_DEV: '1', POPOUT_API_URL: `http://${address}:${port}`, POPOUT_TOKEN: app.token, REACT_NATIVE_PACKAGER_HOSTNAME: address, EXPO_NO_TELEMETRY: '1', EXPO_OFFLINE: '1' };
 delete env.MODEL_API_KEY;
-const child = spawn(process.execPath, [expoCli, 'start', '--lan', '--port', '8082'], { cwd: root, env, windowsHide: true, stdio: 'inherit' });
+const child = spawn(process.execPath, [expoCli, 'start', '--go', '--lan', '--port', '8082'], { cwd: root, env, windowsHide: true, stdio: 'inherit' });
 const close = () => { child.kill(); app.server.close(); };
 process.on('SIGINT', close); process.on('SIGTERM', close);
 child.once('error', error => { console.error(error.message); app.server.close(); });

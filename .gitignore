@@ -6,3 +6,7 @@ node_modules/
 .local/
 dist/
 *.log
+
+/android/
+/ios/
+modules/**/android/build/

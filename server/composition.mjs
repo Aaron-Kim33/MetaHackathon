@@ -10,7 +10,10 @@ export const DEFAULTS = Object.freeze({ ratio: 'portrait', ...PHOTO_FRAME_PRESET
 
 export function settings(value = {}) {
   insist(value && typeof value === 'object' && !Array.isArray(value), '편집 설정이 올바르지 않아요.');
-  const result = { mode: 'frame', ...DEFAULTS };
+  const result = { mode: 'frame', spatialEnabled: false, spatialStrength: 0.7, ...DEFAULTS };
+  result.spatialEnabled = value.spatialEnabled ?? false;
+  result.spatialStrength = value.spatialStrength ?? 0.7;
+  insist(typeof result.spatialEnabled === 'boolean' && Number.isFinite(result.spatialStrength) && result.spatialStrength >= 0 && result.spatialStrength <= 1, '입체 미리보기 설정을 확인해 주세요.');
   if (Object.hasOwn(value, 'mode')) result.mode = value.mode;
   insist(['plain', 'frame', 'sticker'].includes(result.mode), '편집 모드를 확인해 주세요.');
   result.hidePrimary = value.hidePrimary ?? false;

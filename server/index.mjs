@@ -6,12 +6,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { AppError, insist } from './errors.mjs';
 import { compose, normalisePhoto, settings, cutoutFromRaster } from './composition.mjs';
-import { Store, ModelJobs, validId } from './store.mjs';
+import { Store, ModelJobs, validId, atomicJson } from './store.mjs';
 import { segment, generateDecoration } from './meta.mjs';
 import { COMPOSITION_VERSION } from '../src/composition-scene.ts';
 import { subjectShadow } from './subject-shadow.mjs';
 import { fixture } from './fixture.mjs';
-import { refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds, makeHitMask } from './mask.mjs';
+import { deviceMaskCutout, refineMask, validateStrokes, photoWithMaskEdits, contourCutout, trimSticker, alphaBounds, makeHitMask } from './mask.mjs';
 
 const home = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export async function localToken(directory) {
@@ -72,6 +72,12 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
       if (req.method === 'GET' && url.pathname === '/status') { send(200, { modelConfigured: !!key?.trim(), creditsConfirmed, usage: jobs.usage() }); return; }
+      if (req.method === 'GET' && url.pathname === '/editor-state') {
+        let saved;
+        try { saved = JSON.parse(await readFile(path.join(root, 'editor-state.json'), 'utf8')); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; send(200, { snapshot: null }); return; }
+        send(200, { snapshot: { view: await view(saved.projectId), history: [], activeStickerId: 'primary', pendingJob: saved.pendingJob || null } }); return;
+      }
       if (req.method === 'GET' && url.pathname.startsWith('/jobs/')) {
         const id = url.pathname.split('/').at(-1); insist(validId(id), '작업 ID가 올바르지 않아요.');
         const job = jobs.jobs[id]; insist(job, '작업 기록을 찾지 못했어요.', 404); send(200, job); return;
@@ -79,6 +85,12 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       if (req.method === 'GET' && url.pathname.startsWith('/projects/')) { send(200, await view(url.pathname.split('/').at(-1))); return; }
       insist(req.method === 'POST', '지원하지 않는 요청이에요.', 404);
       const data = await body(req);
+      if (url.pathname === '/editor-state') {
+        await store.get(data.projectId);
+        insist(data.pendingJob == null || validId(data.pendingJob), '작업 ID가 올바르지 않아요.');
+        await mutate(() => atomicJson(path.join(root, 'editor-state.json'), { projectId: data.projectId, pendingJob: data.pendingJob || null }));
+        send(200, { saved: true }); return;
+      }
       if (url.pathname === '/projects') {
         insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 사진을 선택해 주세요.');
         const photo = await normalisePhoto(Buffer.from(data.image, 'base64'));
@@ -156,6 +168,37 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           latest.options = updatedOptions || settings(latest.options || undefined);
           insist(latest.options.stickerTransforms.every(t => t.id === data.stickerId || latest.stickers.some(item => item.id === t.id)), '스티커 목록이 변경됐어요.', 409);
           latest.options.stickerTransforms = latest.options.stickerTransforms.filter(item => item.id !== data.stickerId);
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
+      if (url.pathname === '/cutout/device') {
+        insist(!jobs.active, 'AI 작업이 끝난 뒤 기기 자동 분리를 적용해 주세요.', 409);
+        insist(['apple-vision', 'android-mlkit'].includes(data.provider), '자동 누끼 제공자를 확인해 주세요.');
+        insist(typeof data.mask === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.mask) && data.mask.length <= 17000000, '올바른 누끼 마스크가 필요해요.');
+        const asset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
+        insist(!data.assetId || asset, '가져온 사진을 찾지 못했어요.');
+        insist(asset || (data.sourceFile === (project.sourceFile || 'source.png') && data.baseRevision === (project.maskRevision || 0)), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
+        const source = await store.read(project.id, asset ? asset.file : project.sourceFile || 'source.png');
+        const cutout = await deviceMaskCutout(source, Buffer.from(data.mask, 'base64'));
+        await mutate(async () => {
+          const latest = await store.get(project.id), id = randomUUID();
+          insist(!jobs.active, 'AI 작업이 끝난 뒤 기기 자동 분리를 적용해 주세요.', 409);
+          insist(asset || ((latest.sourceFile || 'source.png') === data.sourceFile && (latest.maskRevision || 0) === data.baseRevision), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
+          if (asset) {
+            insist((latest.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
+            const file = 'sticker-' + id + '.png', sourceFile = 'sticker-source-' + id + '.png', trimmed = await trimSticker(source, cutout);
+            await store.write(project.id, file, trimmed.bytes); await store.write(project.id, sourceFile, trimmed.source);
+            latest.stickers ||= []; latest.stickers.push({ id, file, sourceFile, width: trimmed.width, height: trimmed.height, label: stickerLabel(latest), provider: data.provider });
+            latest.options = settings(latest.options || undefined);
+            latest.options.stickerTransforms.push({ id, x: 0.5, y: 0.45, scale: 0.65 });
+            if (latest.pendingImport === asset.id) latest.pendingImport = null;
+          } else {
+            await store.write(project.id, 'subject-' + id + '.png', cutout);
+            latest.candidates.push({ id, label: '기기에서 자동 분리', provider: data.provider }); latest.selectedId = id;
+            latest.maskRevision = (latest.maskRevision || 0) + 1; latest.maskEdits = {};
+            latest.options = settings({ ...(latest.options || {}), hidePrimary: false });
+          }
           await store.save(latest);
         });
         send(200, await view(project.id)); return;
