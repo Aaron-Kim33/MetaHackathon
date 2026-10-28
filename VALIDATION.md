@@ -65,3 +65,5 @@ APK 0.1.1/versionCode 2 ARM64 빌드·서명 검증 성공(115,374,533 bytes, SH
 
 2026-10-28 팝아웃 드래그: Seeker Android 16에서 동일한 1.6초 왕복 드래그의 gfxinfo 비교. 기존 SVG 비트맵 경로 26 frames / median 750ms / slow bitmap uploads 12 → 네이티브 Image + Animated 경로 488 frames / median 11ms / p95 13ms / slow bitmap uploads 0. 이미 잘린 피사체를 850ms 누른 후 이동해도 maskRevision 5 유지, 추가 분리 없음. 드래그 중/해제 후 같은 400×400 영역 픽셀 차이 0. 자료는 로컬 .local/drag-qa에 보관하며 사용자 사진은 커밋하지 않음. 다른 기기와 iOS의 실제 성능은 미측정.
 최종 검증: TypeScript 검사 통과, 자동 테스트 83/83 통과. 테스트로 변경한 사진 위치를 원래 값으로 복원하고 Seeker 앱 재실행 후 저장된 위치·maskRevision 유지와 정상 편집 화면을 확인. 새 AndroidRuntime 오류 없음. APK 재설치 없이 JS 갱신 적용.
+
+2026-10-28 기울기 미리보기: 버튼을 기울여 보기 / 편집으로 돌아가기 / 현재 각도를 기준으로로 변경. 재설정 시 센서를 재구독하는 대신 마지막 유효 각도를 즉시 기준으로 사용하고 안내 문구 표시. 동작 줄이기 활성화 시 무반응 대신 이유 안내. TypeScript 및 현재 각도 재설정 회귀 테스트 통과, Metro 새로고침 전송. 실제 휴대폰을 손으로 기울이는 동작은 미확인.

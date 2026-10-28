@@ -1,4 +1,20 @@
 export type MotionPoint = { x: number; y: number };
+type Rotation = { beta: number; gamma: number };
+export class MotionCalibration {
+  private origin: Rotation | null = null;
+  private latest: Rotation | null = null;
+  private point: MotionPoint = { x: 0, y: 0 };
+  sample(rotation: Rotation): MotionPoint {
+    if (![rotation.beta, rotation.gamma].every(Number.isFinite)) return this.point;
+    this.latest = { beta: rotation.beta, gamma: rotation.gamma };
+    this.origin ||= this.latest;
+    return this.point = relativeMotion(this.latest, this.origin, this.point);
+  }
+  recenter(): MotionPoint {
+    this.origin = this.latest;
+    return this.point = { x: 0, y: 0 };
+  }
+}
 const clamp = (n: number) => Math.max(-1, Math.min(1, n));
 export function relativeMotion(rotation: { beta: number; gamma: number }, origin: { beta: number; gamma: number }, previous: MotionPoint): MotionPoint {
   if (![rotation.beta, rotation.gamma, origin.beta, origin.gamma].every(Number.isFinite)) return previous;
