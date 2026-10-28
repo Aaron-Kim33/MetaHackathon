@@ -22,7 +22,7 @@ export function relativeMotion(rotation: { beta: number; gamma: number }, origin
   const x = clamp(wrap(rotation.gamma - origin.gamma) / 0.35), y = clamp(wrap(rotation.beta - origin.beta) / 0.35);
   return { x: previous.x + (x - previous.x) * 0.18, y: previous.y + (y - previous.y) * 0.18 };
 }
-export function spatialOffset(role: 'backdrop' | 'scene' | 'sticker', motion: MotionPoint, strength: number) {
-  const depth = role === 'backdrop' ? -12 : role === 'scene' ? 12 : 25;
+export function spatialOffset(role: 'backdrop' | 'scene' | 'foreground' | 'sticker', motion: MotionPoint, strength: number) {
+  const depth = role === 'backdrop' ? -38 : role === 'scene' ? 18 : role === 'foreground' ? 70 : 92;
   return { x: motion.x * depth * strength, y: motion.y * depth * strength };
 }
