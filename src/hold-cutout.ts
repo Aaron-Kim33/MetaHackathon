@@ -1,3 +1,4 @@
+export const canAutoLiftPhoto = (hasSubject: boolean, hitId: string | null) => !hasSubject && (!hitId || hitId === 'primary');
 export class HoldCutout {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fire: () => void;

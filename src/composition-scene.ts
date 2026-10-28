@@ -3,6 +3,7 @@ import { frameMatrix } from './frame.ts';
 import { backgroundPhotoRect, photoLayout, stickerRect } from './layout.ts';
 import type { Dimensions } from './layout';
 import { orderedLayers } from './layer-order.ts';
+import { compositionClips, compositionShadowOffset } from './composition-geometry.ts';
 export const COMPOSITION_VERSION = 2;
 export type SceneNode = { key: string; type: 'text' | 'path' | 'g' | 'rect' | 'circle' | 'ellipse' | 'image' | 'clipPath' | 'linearGradient' | 'radialGradient' | 'stop'; attrs: Record<string, string | number>; asset?: string; text?: string; children?: SceneNode[] };
 export type SceneContent = { source: Dimensions; backdrop?: Dimensions | null; subject: boolean; shadow: boolean; decoration?: Dimensions | null; stickers: (Dimensions & { id: string })[] };
@@ -13,10 +14,11 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
   const g = photoLayout(content.source, options), { width, height, screen: q, photo } = g;
   const matrix = frameMatrix(options), cx = width / 2, cy = height / 2;
   const transform = `matrix(${matrix.a} ${matrix.b} ${matrix.c} ${matrix.d} ${cx - matrix.a * cx - matrix.c * cy} ${cy - matrix.b * cx - matrix.d * cy})`;
-  const screen = { x: q.x, y: q.y, width: q.width, height: q.height, rx: 6 };
+  const clips = compositionClips(q, g), shadowOffset = compositionShadowOffset(options.depth);
+  const screen = { x: q.x, y: q.y, width: q.width, height: q.height, rx: clips.screenClip.radius };
   const defs = [
     node('screen-clip', 'clipPath', { id: 'scene-screen', clipPathUnits: 'userSpaceOnUse' }, [node('screen-path', 'rect', screen)]),
-    node('escape-clip', 'clipPath', { id: 'scene-escape', clipPathUnits: 'userSpaceOnUse' }, [node('escape-top', 'rect', { x: 0, y: 0, width, height: q.y + q.height - 24 }), node('escape-bottom', 'rect', screen)]),
+    node('escape-clip', 'clipPath', { id: 'scene-escape', clipPathUnits: 'userSpaceOnUse' }, [node('escape-top', 'rect', clips.escapeTop), node('escape-bottom', 'rect', screen)]),
     node('metal', 'linearGradient', { id: 'scene-metal', x1: '0%', y1: '0%', x2: '100%', y2: '100%' }, [node('metal-light', 'stop', { offset: '0%', stopColor: '#d5dfc8' }), node('metal-mid', 'stop', { offset: '40%', stopColor: '#9cae91' }), node('metal-dark', 'stop', { offset: '100%', stopColor: '#101827' })]),
     node('ground', 'radialGradient', { id: 'scene-ground', cx: '50%', cy: '50%', r: '50%' }, [node('ground-dark', 'stop', { offset: '0%', stopColor: '#101827', stopOpacity: 0.24 }), node('ground-clear', 'stop', { offset: '100%', stopColor: '#101827', stopOpacity: 0 })]),
   ];
@@ -45,7 +47,7 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
   }
   if (!options.hidePrimary) {
     if (content.subject) {
-      if (options.mode === 'frame' && content.shadow && options.shadow > 0) primary.push(image('subject-shadow', 'shadow', { x: photo.x + Math.round(4 + options.depth * 8), y: photo.y + Math.round(6 + options.depth * 12), width: photo.width, height: photo.height, opacity: options.shadow, clipPath: 'url(#scene-screen)' }));
+      if (options.mode === 'frame' && content.shadow && options.shadow > 0) primary.push(image('subject-shadow', 'shadow', { x: photo.x + shadowOffset.x, y: photo.y + shadowOffset.y, width: photo.width, height: photo.height, opacity: options.shadow, clipPath: 'url(#scene-screen)' }));
       primary.push(image('subject', 'subject', { ...photo, ...(options.mode === 'frame' ? { clipPath: 'url(#scene-escape)' } : {}) }));
     } else if (options.mode === 'plain') primary.push(image('plain-photo', 'source', photo));
   }
