@@ -7,14 +7,34 @@ export function surfaceMesh(surface: DepthSurface) {
   const aspect = surface.width / surface.height, vertices = new Float32Array(w * h * 5), indices: number[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x;
-    const border = surface.id === 'backdrop' ? .08 : 0;
-    const u = x === 0 ? -border : x === w - 1 ? 1 + border : x / (w - 1);
-    const v = y === 0 ? -border : y === h - 1 ? 1 + border : y / (h - 1);
+    const u = x / (w - 1), v = y / (h - 1);
     const z = surface.baseZ + (surface.relief ? surface.depth[i] / 255 - .5 : 0) * surface.relief;
     vertices.set([(u * 2 - 1) * aspect * (3 - z) / 3, (1 - v * 2) * (3 - z) / 3, z, u, v], i * 5);
   }
   for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) { const a = y * w + x; indices.push(a,a+w,a+1,a+1,a+w,a+w+1); }
   return { vertices, indices: new Uint16Array(indices), edges: [] };
+}
+export function surfaceBoundary(surface: DepthSurface, vertices: Float32Array) {
+  const w = surface.relief ? surface.gridWidth : 2, h = surface.relief ? surface.gridHeight : 2;
+  const ids: number[] = [];
+  for (let x = 0; x < w; x++) ids.push(x);
+  for (let y = 1; y < h; y++) ids.push(y * w + w - 1);
+  for (let x = w - 2; x >= 0; x--) ids.push((h - 1) * w + x);
+  for (let y = h - 2; y > 0; y--) ids.push(y * w);
+  return ids.map(i => [...vertices.slice(i * 5, i * 5 + 3)]);
+}
+// Cover the viewport with real image pixels instead of clamping/repeating the
+// outermost pixel row when the camera reveals the photo's finite boundary.
+export function depthViewportScale(boundary: number[][], aspect: number, camera: ReturnType<typeof depthCamera>) {
+  if (!boundary.length) return 1;
+  const points = boundary.map(p => projectDepthPoint(p, aspect, camera));
+  let scale = 1;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    const nx = a.y - b.y, ny = b.x - a.x, distance = nx * a.x + ny * a.y;
+    if (distance > 1e-8) scale = Math.max(scale, (Math.abs(nx) + Math.abs(ny)) / distance);
+  }
+  return scale > 1.001 ? scale * 1.004 : scale;
 }
 // A depth map is inverse depth: bright pixels are closer. Reconstruct each ray
 // so that the neutral camera exactly reproduces the original photo.

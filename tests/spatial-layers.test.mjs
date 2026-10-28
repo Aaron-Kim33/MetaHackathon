@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { extendInvisibleDepth, padTransparentColours } from '../server/spatial-layers.mjs';
-import { surfaceMesh, depthCamera, projectDepthPoint } from '../src/depth-mesh.ts';
+import { surfaceMesh, depthCamera, projectDepthPoint, surfaceBoundary, depthViewportScale } from '../src/depth-mesh.ts';
 import { createApp } from '../server/index.mjs';
 
 test('invisible depth and RGB extension preserve alpha and every original visible pixel', () => {
@@ -25,6 +25,25 @@ test('rigid phone geometry stays a plane while subject relief remains continuous
     const p=projectDepthPoint([...subject.vertices.slice(i,i+3)],.8,depthCamera({x:0,y:0},.7));
     assert.ok(Math.abs(p.x-(subject.vertices[i+3]*2-1))<1e-6);
     assert.ok(Math.abs(p.y-(1-subject.vertices[i+4]*2))<1e-6);
+  }
+});
+
+test('tilting up/down covers the viewport without repeating out-of-range edge pixels', () => {
+  const surface = { id:'backdrop',width:800,height:1000,gridWidth:4,gridHeight:4,depth:Array(16).fill(128),baseZ:-.6,relief:.18 };
+  const mesh=surfaceMesh(surface), boundary=surfaceBoundary(surface,mesh.vertices);
+  for(let i=0;i<mesh.vertices.length;i+=5) {
+    assert.ok(mesh.vertices[i+3]>=0 && mesh.vertices[i+3]<=1);
+    assert.ok(mesh.vertices[i+4]>=0 && mesh.vertices[i+4]<=1);
+  }
+  assert.ok(Math.abs(depthViewportScale(boundary,.8,depthCamera({x:0,y:0},1))-1)<1e-6);
+  for(const x of [-1,0,1]) for(const y of [-1,0,1]) {
+    const camera=depthCamera({x,y},1), scale=depthViewportScale(boundary,.8,camera);
+    assert.ok(scale>=1 && scale<1.35);
+    const points=boundary.map(p=>projectDepthPoint(p,.8,camera));
+    for(let i=0;i<points.length;i++) {
+      const a=points[i],b=points[(i+1)%points.length],nx=a.y-b.y,ny=b.x-a.x;
+      assert.ok((nx*a.x+ny*a.y)*scale+1e-6>=Math.abs(nx)+Math.abs(ny),'all viewport corners must remain inside the actual photo');
+    }
   }
 });
 
