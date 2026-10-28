@@ -62,3 +62,23 @@ test('deleting the primary cutout leaves the other sticker visible and supports 
   const restored = await compose(args);
   assert.deepEqual(pixel(await sharp(restored.bytes).raw().toBuffer(), 540, 675), [255, 0, 0, 255]);
 });
+
+test('deleting a popout photo removes both its screen copy and foreground from the exported image', async () => {
+  const source = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#ff0000' } }).png().toBuffer();
+  const cutout = await sharp(source).ensureAlpha().png().toBuffer();
+  const sticker = await sharp({ create: { width: 20, height: 20, channels: 4, background: '#0000ff' } }).png().toBuffer();
+  const id = '11111111-1111-4111-8111-111111111111';
+  const args = { source, cutout, stickers: [{ id, bytes: sticker, width: 20, height: 20 }], options: { mode: 'frame', background: '#ffffff', stickerTransforms: [{ id, x: .8, y: .8, scale: .2 }] } };
+  const hidden = await compose({ ...args, options: { ...args.options, hidePrimary: true } });
+  const visible = await compose(args);
+  const countRed = async bytes => {
+    const data = await sharp(bytes).ensureAlpha().raw().toBuffer(); let count = 0;
+    for (let i = 0; i < data.length; i += 4) if (data[i] > 240 && data[i + 1] < 10 && data[i + 2] < 10 && data[i + 3] > 240) count++;
+    return count;
+  };
+  assert.equal(await countRed(hidden.bytes), 0, 'original photo cannot remain inside the phone after deletion');
+  assert.ok(await countRed(visible.bytes) > 10000, 'undoing deletion restores the actual photo');
+  const pixels = await sharp(hidden.bytes).ensureAlpha().raw().toBuffer();
+  const at = (1080 * 1080 + 864) * 4;
+  assert.deepEqual([...pixels.subarray(at, at + 4)], [0, 0, 255, 255], 'independent sticker remains visible');
+});

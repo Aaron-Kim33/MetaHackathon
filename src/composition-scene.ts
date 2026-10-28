@@ -4,7 +4,7 @@ import { backgroundPhotoRect, photoLayout, stickerRect } from './layout.ts';
 import type { Dimensions } from './layout';
 import { orderedLayers } from './layer-order.ts';
 import { compositionClips, compositionShadowOffset } from './composition-geometry.ts';
-export const COMPOSITION_VERSION = 2;
+export const COMPOSITION_VERSION = 3;
 export type SceneNode = { key: string; type: 'text' | 'path' | 'g' | 'rect' | 'circle' | 'ellipse' | 'image' | 'clipPath' | 'linearGradient' | 'radialGradient' | 'stop'; attrs: Record<string, string | number>; asset?: string; text?: string; children?: SceneNode[] };
 export type SceneContent = { source: Dimensions; backdrop?: Dimensions | null; subject: boolean; shadow: boolean; decoration?: Dimensions | null; stickers: (Dimensions & { id: string })[] };
 export type CompositionScene = { width: number; height: number; defs: SceneNode[]; background: SceneNode[]; primary: SceneNode[]; layers: SceneNode[] };
@@ -31,7 +31,7 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
       node('phone-depth', 'rect', { x: q.x - 14 + extrusion, y: q.y - 38 + extrusion, width: q.width + 28, height: q.height + 82, rx: 50, fill: '#62735a' }),
       node('phone-case', 'rect', { x: q.x - 14, y: q.y - 38, width: q.width + 28, height: q.height + 82, rx: 50, fill: 'url(#scene-metal)' }),
       node('phone-face', 'rect', { x: q.x - 7, y: q.y - 32, width: q.width + 14, height: q.height + 70, rx: 44, fill: '#111313' }),
-      image('screen-photo', 'source', { ...photo, clipPath: 'url(#scene-screen)' }),
+      ...(!options.hidePrimary ? [image('screen-photo', 'source', { ...photo, clipPath: 'url(#scene-screen)' })] : []),
       node('phone-highlight', 'rect', { x: q.x - 12, y: q.y - 36, width: q.width + 24, height: q.height + 78, rx: 48, fill: 'none', stroke: '#edf1df', strokeOpacity: 0.7, strokeWidth: 2 }),
       label('status-time', '9:41', q.x + 24, q.y - 10, 12),
       node('camera-pill', 'rect', { x: q.x + q.width / 2 - 33, y: q.y - 27, width: 66, height: 12, rx: 6, fill: '#050606' }),

@@ -126,7 +126,7 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
     {options.mode !== 'sticker' && <View style={[StyleSheet.absoluteFill, { backgroundColor: options.background }]} />}
     {background}{background && options.backgroundDim > 0 && <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: options.backgroundDim }]} />}
     <View style={[StyleSheet.absoluteFill, { transform: offset('scene') }]}><View style={plane}>
-      {options.mode === 'frame' && <><PhoneChrome source={view.project} options={options} />{raw && <View style={clip(plan.screenClip)}><Texture source={raw} pose={photoPose} left={plan.screenClip.x} top={plan.screenClip.y} /></View>}</>}
+      {options.mode === 'frame' && <><PhoneChrome source={view.project} options={options} />{raw && !options.hidePrimary && <View style={clip(plan.screenClip)}><Texture source={raw} pose={photoPose} left={plan.screenClip.x} top={plan.screenClip.y} /></View>}</>}
       {options.decorationDepth === 'back' && ornament}
     </View></View>
     {orderedLayers(options).map(id => {
