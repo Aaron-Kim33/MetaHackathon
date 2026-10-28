@@ -5,6 +5,7 @@ import { buildCompositionScene } from './composition-scene';
 import { useSpatialMotion } from './use-spatial-motion';
 import { spatialOffset } from './spatial-motion';
 import type { SceneNode } from './composition-scene';
+import { nativeSceneChildren } from './native-scene-children';
 const elements = { text: Text, path: Path, g: G, rect: Rect, circle: Circle, ellipse: Ellipse, image: Image, clipPath: ClipPath, linearGradient: LinearGradient, radialGradient: RadialGradient, stop: Stop };
 export const CompositionCanvas = memo(function CompositionCanvas({ view, options, calibration = 0 }: { view: ProjectView; options: EditOptions; calibration?: number }) {
   const cache = useRef(new Map<string, { data: string; href: { uri: string } }>());
@@ -22,7 +23,7 @@ export const CompositionCanvas = memo(function CompositionCanvas({ view, options
       href = item.href;
     }
     const Element = elements[n.type] as React.ElementType;
-    return <Element key={n.key} {...n.attrs} {...(href ? { href } : {})}>{n.text}{n.children?.map(render)}</Element>;
+    return <Element key={n.key} {...n.attrs} {...(href ? { href } : {})}>{nativeSceneChildren(n, render)}</Element>;
   };
   const rendered = useMemo(() => ({ defs: scene.defs.map(render), background: scene.background.map(n => ({ key: n.key, child: render(n) })), layers: scene.layers.map(n => ({ key: n.key, child: render(n) })) }), [scene, view]);
   const offset = (role: 'backdrop' | 'scene' | 'sticker') => { const p = spatialOffset(role, motion, options.spatialStrength ?? 0.7); return 'translate(' + p.x + ' ' + p.y + ')'; };
