@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, AppState, BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, AppState, BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, Vibration, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
@@ -49,6 +49,12 @@ function Editor() {
   const [decorationTab, setDecorationTab] = useState<'create' | 'place'>('create');
   const [moreTab, setMoreTab] = useState<'settings' | 'jobs'>(initialConnection.token ? 'jobs' : 'settings');
   const [deviceCutoutError, setDeviceCutoutError] = useState('');
+  const [cutoutNotice, setCutoutNotice] = useState<{ state: 'working' | 'success' | 'error'; text: string } | null>(null);
+  useEffect(() => {
+    if (cutoutNotice?.state !== 'success') return;
+    const timer = setTimeout(() => setCutoutNotice(null), 4500);
+    return () => clearTimeout(timer);
+  }, [cutoutNotice]);
   const [spatialCalibration, setSpatialCalibration] = useState(0);
   const [compare, setCompare] = useState(false), [keyboardOpen, setKeyboardOpen] = useState(false);
   const [rootHeight, setRootHeight] = useState(viewport.height);
@@ -182,7 +188,7 @@ function Editor() {
   const cutOnDevice = async (selectedPoint: { x: number; y: number } | null = null, assetId: string | null = null) => {
     if (!view || lock.current) return;
     if (pendingJob) throw new Error('앞선 AI 작업이 끝난 뒤 자동 분리해 주세요.');
-    lock.current = true; setDeviceCutoutError(''); setBusy('기기에서 피사체를 분리하는 중'); setMessage('기기에서 자동 분리 중이에요. 첫 실행은 모델 준비에 시간이 걸릴 수 있어요.');
+    lock.current = true; setDeviceCutoutError(''); setCutoutNotice({ state: 'working', text: '피사체를 찾고 있어요… 손을 떼도 돼요.' }); Vibration.vibrate(25); setBusy('기기에서 피사체를 분리하는 중'); setMessage('기기에서 자동 분리 중이에요. 첫 실행은 모델 준비에 시간이 걸릴 수 있어요.');
     try {
       await previewFlight.current; await savePendingOptions();
       const source = assetId ? view.pendingPhoto?.id === assetId ? view.pendingPhoto.source : null : view.source;
@@ -191,10 +197,11 @@ function Editor() {
       const next = await request<ProjectView>(connection, '/cutout/device', { projectId: view.project.id, assetId, sourceFile: view.project.sourceFile || 'source.png', baseRevision: view.project.maskRevision || 0, ...result });
       accept(next); setHistory([]); setMaskOpen(false); setPicking(false);
       setActiveStickerId(assetId ? next.stickers?.at(-1)?.id || 'primary' : 'primary');
+      setCutoutNotice({ state: 'success', text: '분리 완료! 피사체를 끌어서 옮겨 보세요.' }); Vibration.vibrate([0, 20, 70, 20]);
       setMessage('기기 자동 누끼를 적용했어요. Meta 호출 없이 분리했으며 기존 스티커와 배경은 유지돼요.');
     } catch (error) { setDeviceCutoutError(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'); throw error; } finally { lock.current = false; setBusy(''); }
   };
-  const autoCut = (point: { x: number; y: number } | null = null, assetId: string | null = null) => { void cutOnDevice(point, assetId).catch(error => setMessage(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.')); };
+  const autoCut = (point: { x: number; y: number } | null = null, assetId: string | null = null) => { void cutOnDevice(point, assetId).catch(error => { const text = error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'; setMessage(text); setCutoutNotice({ state: 'error', text }); Vibration.vibrate(80); }); };
   const toggleSpatial = () => {
     if (!draft) return;
     if (draft.spatialEnabled) { render({ ...draft, spatialEnabled: false }); return; }
@@ -407,7 +414,7 @@ function Editor() {
         </>}
         {activeTool === 'subject' && view && <>
           {layerPicker}
-          <Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? '사진 속 피사체를 꾹 누르면 자동으로 분리해요.' : '꾹 눌러 자동 분리는 설치형 개발 빌드에서 사용해요.')}</Text>
+          <Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? '처음 자를 때는 편집 화면에서 피사체를 0.6초 꾹 눌러요. 다시 자르려면 대상 선택에서 원본을 꾹 눌러요.' : '꾹 눌러 자동 분리는 설치형 개발 빌드에서 사용해요.')}</Text>
           <Button title="테두리로 자르기" disabled={disabled} onPress={() => openMask(true)} />
           <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
           <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
@@ -448,6 +455,11 @@ function Editor() {
       <Pressable accessibilityRole="button" accessibilityLabel="누르고 원본 보기" onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} disabled={controlsDisabled || !view} style={[styles.bottomButton, (controlsDisabled || !view) && styles.disabled]}><Text style={styles.bottomText}>◫ 원본</Text></Pressable>
       <View style={styles.bottomCenter}>{picking ? <Button title="선택 화면 닫기" secondary disabled={controlsDisabled} onPress={() => setPicking(false)} /> : <Pressable accessibilityRole="button" disabled={controlsDisabled || !view} onPress={() => { setPositionTab('ratio'); setActiveTool('position'); }} style={styles.ratioChip}><Text style={styles.ratioText}>{draft ? ({ portrait: '4:5', story: '9:16', square: '1:1' }[draft.ratio]) : '사진 편집'}</Text></Pressable>}</View>
       <Pressable accessibilityRole="button" accessibilityLabel="완성 사진 공유" disabled={controlsDisabled || !view} onPress={() => save(true)} style={[styles.bottomButton, (controlsDisabled || !view) && styles.disabled]}><Text style={styles.bottomText}>공유 ↗</Text></Pressable>
+    </View>}
+    {cutoutNotice && <View accessibilityLiveRegion="assertive" style={{ position: 'absolute', top: 82, left: 16, right: 16, zIndex: 500, elevation: 16, borderRadius: 16, padding: 14, backgroundColor: cutoutNotice.state === 'error' ? '#552B36' : '#253D35', borderWidth: 1, borderColor: cutoutNotice.state === 'error' ? '#ED8D9B' : '#92DAB6', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      {cutoutNotice.state === 'working' ? <ActivityIndicator color="#ADFFD3" /> : <Text style={{ color: '#fff', fontSize: 20 }}>{cutoutNotice.state === 'success' ? '✓' : '!'}</Text>}
+      <Text style={{ color: '#fff', fontSize: 13, lineHeight: 19, flex: 1 }}>{cutoutNotice.text}</Text>
+      {cutoutNotice.state !== 'working' && <Pressable accessibilityRole="button" accessibilityLabel="분리 안내 닫기" hitSlop={12} onPress={() => setCutoutNotice(null)}><Text style={{ color: '#fff', fontSize: 20 }}>×</Text></Pressable>}
     </View>}
   </View></KeyboardAvoidingView></SafeAreaView>;
 }
