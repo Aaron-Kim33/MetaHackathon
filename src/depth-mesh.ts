@@ -23,18 +23,36 @@ export function surfaceBoundary(surface: DepthSurface, vertices: Float32Array) {
   for (let y = h - 2; y > 0; y--) ids.push(y * w);
   return ids.map(i => [...vertices.slice(i * 5, i * 5 + 3)]);
 }
-// Cover the viewport with real image pixels instead of clamping/repeating the
-// outermost pixel row when the camera reveals the photo's finite boundary.
-export function depthViewportScale(boundary: number[][], aspect: number, camera: ReturnType<typeof depthCamera>) {
-  if (!boundary.length) return 1;
-  const points = boundary.map(p => projectDepthPoint(p, aspect, camera));
-  let scale = 1;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i], b = points[(i + 1) % points.length];
-    const nx = a.y - b.y, ny = b.x - a.x, distance = nx * a.x + ny * a.y;
-    if (distance > 1e-8) scale = Math.max(scale, (Math.abs(nx) + Math.abs(ny)) / distance);
+export const DEPTH_VIEW_SCALE = 1.08;
+function insidePolygon(x: number, y: number, polygon: { x: number; y: number }[]) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i], b = polygon[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
   }
-  return scale > 1.001 ? scale * 1.004 : scale;
+  return inside;
+}
+export function depthViewportCovered(boundary: number[][], aspect: number, camera: ReturnType<typeof depthCamera>, scale = DEPTH_VIEW_SCALE) {
+  if (!boundary.length) return true;
+  const polygon = boundary.map(p => projectDepthPoint(p, aspect, camera));
+  const edge = 1.002 / scale;
+  for (const t of [-1,-.5,0,.5,1]) {
+    if (!insidePolygon(t*edge,-edge,polygon) || !insidePolygon(t*edge,edge,polygon) || !insidePolygon(-edge,t*edge,polygon) || !insidePolygon(edge,t*edge,polygon)) return false;
+  }
+  return true;
+}
+// Choose one crop and one camera range for the whole preview. Neither changes
+// with live tilt, so reaching a photo boundary cannot trigger an automatic zoom.
+export function fixedDepthView(boundary: number[][], aspect: number, strength: number) {
+  if (!boundary.length) return { scale: 1, motionLimit: 1 };
+  const fits = (limit: number) => {
+    for (const x of [-1,-.5,0,.5,1]) for (const y of [-1,-.5,0,.5,1]) if (!depthViewportCovered(boundary,aspect,depthCamera({x,y},strength*limit))) return false;
+    return true;
+  };
+  if (fits(1)) return { scale: DEPTH_VIEW_SCALE, motionLimit: 1 };
+  let low = 0, high = 1;
+  for (let i = 0; i < 9; i++) { const mid = (low + high) / 2; if (fits(mid)) low = mid; else high = mid; }
+  return { scale: DEPTH_VIEW_SCALE, motionLimit: low * .995 };
 }
 // A depth map is inverse depth: bright pixels are closer. Reconstruct each ray
 // so that the neutral camera exactly reproduces the original photo.

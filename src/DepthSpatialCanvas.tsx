@@ -4,7 +4,7 @@ import { GLView } from 'expo-gl';
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as FS from 'expo-file-system/legacy';
 import { useSpatialMotion } from './use-spatial-motion';
-import { depthCamera, depthMesh, surfaceMesh, surfaceBoundary, depthViewportScale } from './depth-mesh';
+import { depthCamera, depthMesh, surfaceMesh, surfaceBoundary, fixedDepthView } from './depth-mesh';
 import type { DepthFrame } from './depth-mesh';
 const vertex = `
 precision highp float; attribute vec3 position; attribute vec2 uv; varying highp vec2 textureUV;
@@ -75,14 +75,17 @@ export default function DepthSpatialCanvas({ frame, strength, calibration }: { f
       if (!alive.current || closed) { cleanup(); return; }
       const camera = gl.getUniformLocation(program, 'camera'); gl.uniform1f(gl.getUniformLocation(program, 'aspect'), a); gl.uniform1i(gl.getUniformLocation(program, 'photo'), 0);
       const viewScale = gl.getUniformLocation(program, 'viewScale');
+      let view = fixedDepthView(boundary,a,latest.current.strength), viewStrength = latest.current.strength;
+      gl.uniform1f(viewScale,view.scale);
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.enableVertexAttribArray(position); gl.enableVertexAttribArray(uv); gl.disable(gl.CULL_FACE); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.clearColor(.93,.91,.87,1);
       const draw = (item: ReturnType<typeof bindMesh>, texture: WebGLTexture) => { gl.bindBuffer(gl.ARRAY_BUFFER, item.vb); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, item.ib); gl.vertexAttribPointer(position,3,gl.FLOAT,false,20,0); gl.vertexAttribPointer(uv,2,gl.FLOAT,false,20,12); gl.bindTexture(gl.TEXTURE_2D,texture); gl.drawElements(gl.TRIANGLES,item.count,gl.UNSIGNED_SHORT,0); };
       const render = () => {
         if (!alive.current || closed) return;
         const t = Date.now() / 1000;
         const input = latest.current.motion.status === 'reduced' ? { x: 0, y: 0 } : latest.current.tour ? { x: Math.sin(t * .75) * .9, y: Math.sin(t * .47) * .55 } : latest.current.motion;
-        const c = depthCamera(input, latest.current.strength);
-        gl.viewport(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.uniform4f(camera,c.yaw,c.pitch,c.shiftX,c.shiftY); gl.uniform1f(viewScale,depthViewportScale(boundary,a,c)); for (const d of drawing) draw(d.item,d.texture); gl.endFrameEXP(); loop=requestAnimationFrame(render);
+        if (latest.current.strength !== viewStrength) { viewStrength = latest.current.strength; view = fixedDepthView(boundary,a,viewStrength); }
+        const c = depthCamera(input, latest.current.strength * view.motionLimit);
+        gl.viewport(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.uniform4f(camera,c.yaw,c.pitch,c.shiftX,c.shiftY); for (const d of drawing) draw(d.item,d.texture); gl.endFrameEXP(); loop=requestAnimationFrame(render);
       };
       render();
     } catch (failure) { cleanup(); if (__DEV__) console.error('Spatial preview initialization failed', failure); if (alive.current) setError(failure instanceof Error ? failure.message : '3D 화면을 표시하지 못했어요.'); }

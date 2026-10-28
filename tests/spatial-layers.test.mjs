@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { extendInvisibleDepth, padTransparentColours } from '../server/spatial-layers.mjs';
-import { surfaceMesh, depthCamera, projectDepthPoint, surfaceBoundary, depthViewportScale } from '../src/depth-mesh.ts';
+import { surfaceMesh, depthCamera, projectDepthPoint, surfaceBoundary, fixedDepthView, depthViewportCovered } from '../src/depth-mesh.ts';
 import { createApp } from '../server/index.mjs';
 
 test('invisible depth and RGB extension preserve alpha and every original visible pixel', () => {
@@ -35,16 +35,14 @@ test('tilting up/down covers the viewport without repeating out-of-range edge pi
     assert.ok(mesh.vertices[i+3]>=0 && mesh.vertices[i+3]<=1);
     assert.ok(mesh.vertices[i+4]>=0 && mesh.vertices[i+4]<=1);
   }
-  assert.ok(Math.abs(depthViewportScale(boundary,.8,depthCamera({x:0,y:0},1))-1)<1e-6);
-  for(const x of [-1,0,1]) for(const y of [-1,0,1]) {
-    const camera=depthCamera({x,y},1), scale=depthViewportScale(boundary,.8,camera);
-    assert.ok(scale>=1 && scale<1.35);
-    const points=boundary.map(p=>projectDepthPoint(p,.8,camera));
-    for(let i=0;i<points.length;i++) {
-      const a=points[i],b=points[(i+1)%points.length],nx=a.y-b.y,ny=b.x-a.x;
-      assert.ok((nx*a.x+ny*a.y)*scale+1e-6>=Math.abs(nx)+Math.abs(ny),'all viewport corners must remain inside the actual photo');
-    }
+  const view=fixedDepthView(boundary,.8,1);
+  assert.equal(view.scale,1.08,'preview crop stays constant');
+  assert.ok(view.motionLimit>0 && view.motionLimit<=1);
+  for(let x=-1;x<=1.001;x+=.1) for(let y=-1;y<=1.001;y+=.1) {
+    const camera=depthCamera({x,y},view.motionLimit);
+    assert.ok(depthViewportCovered(boundary,.8,camera,view.scale),'actual image must cover the viewport throughout the permitted motion');
   }
+  assert.equal(view.scale,1.08,'moving through every tilt must not alter the crop');
 });
 
 test('layered preview preserves the neutral composite, phone rigidity, project data and Meta usage', async t => {
