@@ -4,7 +4,6 @@ import { GLView } from 'expo-gl';
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as FS from 'expo-file-system/legacy';
 import { useSpatialMotion } from './use-spatial-motion';
-import { CachedImage } from './CachedImage';
 import { depthCamera, depthMesh, surfaceMesh } from './depth-mesh';
 import type { DepthFrame } from './depth-mesh';
 const vertex = `
@@ -85,7 +84,6 @@ export default function DepthSpatialCanvas({ frame, strength, calibration }: { f
     } catch (failure) { cleanup(); if (__DEV__) console.error('Spatial preview initialization failed', failure); if (alive.current) setError(failure instanceof Error ? failure.message : '3D 화면을 표시하지 못했어요.'); }
   };
   return <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-    <CachedImage pointerEvents="none" data={frame.farImage} blurRadius={24} resizeMode="cover" style={StyleSheet.absoluteFill} />
     <GLView style={StyleSheet.absoluteFill} onContextCreate={start} msaaSamples={0} />
     <View style={{ position:'absolute',top:12,left:12,right:72,padding:10,borderRadius:12,backgroundColor:'#19171FDF',flexDirection:'row',gap:8,alignItems:'center' }}>
       <View style={{ width:26,height:26,borderRadius:13,borderWidth:1,borderColor:'#8C80A0',alignItems:'center',justifyContent:'center' }}><View style={{ width:7,height:7,borderRadius:4,backgroundColor:motion.status==='active'?'#ADFFD3':'#F4C47D',transform:[{translateX:motion.x*8},{translateY:motion.y*8}] }} /></View>

@@ -1,15 +1,18 @@
-export type DepthSurface = { id: string; image: string; textureImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[]; baseZ: number; relief: number };
+export type DepthSurface = { id: string; image: string; surfaceImage?: string; textureImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[]; baseZ: number; relief: number; bounds?: { x: number; y: number; width: number; height: number } };
 export type DepthFrame = { key: string; model: string; image: string; farImage: string; width: number; height: number; gridWidth: number; gridHeight: number; depth: number[]; layers?: DepthSurface[] };
 export function surfaceMesh(surface: DepthSurface) {
   if (!Number.isFinite(surface.baseZ) || Math.abs(surface.baseZ) > 1 || !Number.isFinite(surface.relief) || surface.relief < 0 || surface.relief > 1) throw Error('입체 면의 깊이가 올바르지 않아요.');
   depthMesh(surface as unknown as DepthFrame); // Validate dimensions and field.
   const w = surface.relief ? surface.gridWidth : 2, h = surface.relief ? surface.gridHeight : 2;
   const aspect = surface.width / surface.height, vertices = new Float32Array(w * h * 5), indices: number[] = [];
+  const bounds = surface.bounds || { x: 0, y: 0, width: 1, height: 1 };
+  if (![bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) throw Error('배경 사진 범위가 올바르지 않아요.');
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x;
     const u = x / (w - 1), v = y / (h - 1);
     const z = surface.baseZ + (surface.relief ? surface.depth[i] / 255 - .5 : 0) * surface.relief;
-    vertices.set([(u * 2 - 1) * aspect * (3 - z) / 3, (1 - v * 2) * (3 - z) / 3, z, u, v], i * 5);
+    const canvasU = bounds.x + u * bounds.width, canvasV = bounds.y + v * bounds.height;
+    vertices.set([(canvasU * 2 - 1) * aspect * (3 - z) / 3, (1 - canvasV * 2) * (3 - z) / 3, z, u, v], i * 5);
   }
   for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) { const a = y * w + x; indices.push(a,a+w,a+1,a+1,a+w,a+w+1); }
   return { vertices, indices: new Uint16Array(indices), edges: [] };

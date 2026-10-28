@@ -10,8 +10,8 @@ const width = 360, height = Math.round(width * frame.height / frame.width), aspe
 const parts = [];
 if (frame.layers) {
   for (const layer of frame.layers) {
-    const pixels = await sharp(Buffer.from(layer.image, 'base64')).ensureAlpha().raw().toBuffer();
-    parts.push({ ...surfaceMesh(layer), pixels, iw: layer.width, ih: layer.height });
+    const { data: pixels, info } = await sharp(Buffer.from(layer.surfaceImage || layer.image, 'base64')).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    parts.push({ ...surfaceMesh(layer), pixels, iw: info.width, ih: info.height });
   }
 } else {
   const pixels = await sharp(Buffer.from(frame.image, 'base64')).ensureAlpha().raw().toBuffer();

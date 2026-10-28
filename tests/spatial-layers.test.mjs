@@ -45,6 +45,18 @@ test('tilt keeps original zoom and full camera motion while real image UVs remai
   assert.ok(Math.min(...views)<-1,'bottom edge cannot be pinned by an adaptive crop');
 });
 
+test('real background margins extend world coverage without inventing texture pixels or changing neutral alignment', () => {
+  const s={id:'backdrop',width:800,height:1000,gridWidth:3,gridHeight:3,depth:Array(9).fill(128),baseZ:-.6,relief:.18,bounds:{x:-.1,y:-.12,width:1.2,height:1.24}};
+  const mesh=surfaceMesh(s);
+  for(let i=0;i<mesh.vertices.length;i+=5){
+    const u=mesh.vertices[i+3],v=mesh.vertices[i+4];
+    assert.ok(u>=0&&u<=1&&v>=0&&v<=1);
+    const p=projectDepthPoint([...mesh.vertices.slice(i,i+3)],.8,depthCamera({x:0,y:0},1));
+    assert.ok(Math.abs(p.x-((s.bounds.x+u*s.bounds.width)*2-1))<1e-6);
+    assert.ok(Math.abs(p.y-(1-(s.bounds.y+v*s.bounds.height)*2))<1e-6);
+  }
+});
+
 test('layered preview preserves the neutral composite, phone rigidity, project data and Meta usage', async t => {
   await mkdir('.local/tests',{recursive:true});const root=await mkdtemp(path.resolve('.local/tests/layers-3d-'));
   const app=await createApp({root,token:'layers-3d',key:'',caps:{sam:0,image:0},depthEstimator:async()=>({width:2,height:2,depth:Uint8Array.from([0,80,160,255])})});
@@ -63,4 +75,10 @@ test('layered preview preserves the neutral composite, phone rigidity, project d
   let total=0;for(let i=0;i<expected.length;i++)total+=Math.abs(expected[i]-composite[i]);
   assert.ok(total/expected.length<1,'separating the scene must preserve the original neutral composition');
   assert.deepEqual(await app.store.get(view.project.id),before);assert.equal(app.jobs.usage().sam.reserved,0);
+  const background=await sharp({create:{width:80,height:160,channels:3,background:'#1265ab'}}).png().toBuffer();
+  await post('/background',{projectId:view.project.id,image:background.toString('base64')});
+  const wide=await post('/spatial',{projectId:view.project.id,renderer:'layered'});
+  const bounds=wide.layers[0].bounds;
+  assert.ok(bounds.y<0 && bounds.y+bounds.height>1,'uncropped original background pixels must be available above and below the viewport');
+  assert.ok(wide.layers[0].surfaceImage);
 });

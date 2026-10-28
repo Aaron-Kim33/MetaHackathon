@@ -5,6 +5,7 @@ import path from 'node:path';
 import { buildCompositionScene, compositionSvg } from '../src/composition-scene.ts';
 import { spatialFrame } from './depth.mjs';
 import { atomicJson } from './store.mjs';
+import { backgroundPhotoRect } from '../src/layout.ts';
 
 const uri = data => `data:image/png;base64,${typeof data === 'string' ? data : data.toString('base64')}`;
 export function padTransparentColours(rgba, width, height) {
@@ -32,7 +33,7 @@ export function extendInvisibleDepth(rgba, width, height) {
   return [...depth];
 }
 export async function spatialLayers(view, root, stickerSources = {}, estimator) {
-  const identity = createHash('sha256').update('separate-surfaces-v2').update(JSON.stringify(view.options));
+  const identity = createHash('sha256').update('separate-surfaces-v3').update(JSON.stringify(view.options));
   for (const pixels of [view.image, view.source, view.subject, view.photoSource, view.backgroundPhoto?.data, view.decorationImage?.data, ...(view.stickers || []).flatMap(s => [s.id, s.data, stickerSources[s.id]])]) identity.update(pixels || '').update('\0');
   const key = identity.digest('hex');
   const folder = path.join(root, 'spatial-layers-cache'), file = path.join(folder, key + '.json');
@@ -73,15 +74,30 @@ export async function spatialLayers(view, root, stickerSources = {}, estimator) 
   for (const group of groups) {
     const image = await raster(group.nodes, assets);
     const neutralCanvas = n => n.key === 'canvas' ? { ...n, attrs: { ...n.attrs, fill: '#808080' } } : n;
-    const depthPng = group.relief ? await raster(group.nodes.map(neutralCanvas), depthAssets) : null;
+    let depthPng = group.relief ? await raster(group.nodes.map(neutralCanvas), depthAssets) : null;
+    let surfaceImage = image, bounds;
+    if (group.id === 'backdrop' && view.backgroundPhoto && view.options.mode !== 'sticker') {
+      const photo = view.backgroundPhoto, r = backgroundPhotoRect(photo, scene, view.options);
+      // Use real pixels outside the editor crop, bounded to a small surround.
+      // No repeated edge rows, synthetic blur, or camera/zoom compensation.
+      const left = Math.max(r.x, -scene.width * .12), top = Math.max(r.y, -scene.height * .12);
+      const right = Math.min(r.x + r.width, scene.width * 1.12), bottom = Math.min(r.y + r.height, scene.height * 1.12);
+      const sx = Math.max(0, Math.floor((left-r.x) / r.width * photo.width)), sy = Math.max(0, Math.floor((top-r.y) / r.height * photo.height));
+      const ex = Math.min(photo.width, Math.ceil((right-r.x) / r.width * photo.width)), ey = Math.min(photo.height, Math.ceil((bottom-r.y) / r.height * photo.height));
+      const crop = { left:sx,top:sy,width:ex-sx,height:ey-sy };
+      bounds = { x:(r.x+sx/photo.width*r.width)/scene.width,y:(r.y+sy/photo.height*r.height)/scene.height,width:crop.width/photo.width*r.width/scene.width,height:crop.height/photo.height*r.height/scene.height };
+      surfaceImage = await sharp(Buffer.from(photo.data,'base64')).extract(crop).removeAlpha().linear(1-(view.options.backgroundDim||0)).resize({width:1024,height:1280,fit:'inside'}).png().toBuffer();
+      depthPng = await sharp(Buffer.from(depthAssets.background.split(',')[1],'base64')).extract(crop).png().toBuffer();
+    }
     const field = depthPng ? await sharp(depthPng).resize(gridWidth, gridHeight).ensureAlpha().raw().toBuffer() : null;
     const depth = field ? extendInvisibleDepth(field, gridWidth, gridHeight) : Array(gridWidth * gridHeight).fill(128);
     // Power-of-two textures allow stable trilinear minification on ES 2 and 3.
-    const textureWidth = 2 ** Math.ceil(Math.log2(width)), textureHeight = 2 ** Math.ceil(Math.log2(height));
-    const raw = await sharp(image).ensureAlpha().raw().toBuffer();
-    const padded = padTransparentColours(raw, width, height);
-    const texture = await sharp(padded, { raw: { width, height, channels: 4 } }).resize(textureWidth, textureHeight, { fit: 'fill' }).png().toBuffer();
-    layers.push({ id: group.id, width, height, gridWidth, gridHeight, depth, baseZ: group.z, relief: group.relief, image: image.toString('base64'), textureImage: texture.toString('base64') });
+    const meta = await sharp(surfaceImage).metadata();
+    const textureWidth = 2 ** Math.ceil(Math.log2(meta.width)), textureHeight = 2 ** Math.ceil(Math.log2(meta.height));
+    const raw = await sharp(surfaceImage).ensureAlpha().raw().toBuffer();
+    const padded = padTransparentColours(raw, meta.width, meta.height);
+    const texture = await sharp(padded, { raw: { width: meta.width, height: meta.height, channels: 4 } }).resize(textureWidth, textureHeight, { fit: 'fill' }).png().toBuffer();
+    layers.push({ id: group.id, width, height, gridWidth, gridHeight, depth, baseZ: group.z, relief: group.relief, bounds, image: image.toString('base64'), surfaceImage: bounds ? surfaceImage.toString('base64') : undefined, textureImage: texture.toString('base64') });
   }
   await atomicJson(file, layers);
   return layers;
