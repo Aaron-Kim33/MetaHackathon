@@ -178,14 +178,23 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         insist(typeof data.mask === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.mask) && data.mask.length <= 17000000, '올바른 누끼 마스크가 필요해요.');
         const asset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
         insist(!data.assetId || asset, '가져온 사진을 찾지 못했어요.');
-        insist(asset || (data.sourceFile === (project.sourceFile || 'source.png') && data.baseRevision === (project.maskRevision || 0)), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
-        const source = await store.read(project.id, asset ? asset.file : project.sourceFile || 'source.png');
+        const sticker = data.stickerId ? (project.stickers || []).find(item => item.id === data.stickerId) : null;
+        insist(!data.stickerId || sticker, '스티커가 변경됐어요. 다시 선택해 주세요.', 409);
+        insist(!(asset && sticker), '분리할 사진 하나를 선택해 주세요.');
+        insist(asset || ((sticker || data.sourceFile === (project.sourceFile || 'source.png')) && data.baseRevision === (project.maskRevision || 0)), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
+        const source = await store.read(project.id, asset ? asset.file : sticker ? sticker.sourceFile : project.sourceFile || 'source.png');
         const cutout = await deviceMaskCutout(source, Buffer.from(data.mask, 'base64'));
         await mutate(async () => {
           const latest = await store.get(project.id), id = randomUUID();
           insist(!jobs.active, 'AI 작업이 끝난 뒤 기기 자동 분리를 적용해 주세요.', 409);
-          insist(asset || ((latest.sourceFile || 'source.png') === data.sourceFile && (latest.maskRevision || 0) === data.baseRevision), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
-          if (asset) {
+          const target = sticker && (latest.stickers || []).find(item => item.id === sticker.id);
+          insist(asset || ((sticker ? target && target.sourceFile === sticker.sourceFile : (latest.sourceFile || 'source.png') === data.sourceFile) && (latest.maskRevision || 0) === data.baseRevision), '사진 또는 누끼가 변경됐어요. 다시 분리해 주세요.', 409);
+          if (target) {
+            const file = 'sticker-' + id + '.png';
+            await store.write(project.id, file, cutout);
+            target.file = file; delete target.maskFile; target.provider = data.provider;
+            latest.maskRevision = (latest.maskRevision || 0) + 1;
+          } else if (asset) {
             insist((latest.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
             const file = 'sticker-' + id + '.png', sourceFile = 'sticker-source-' + id + '.png', trimmed = await trimSticker(source, cutout);
             await store.write(project.id, file, trimmed.bytes); await store.write(project.id, sourceFile, trimmed.source);

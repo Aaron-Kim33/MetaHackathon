@@ -9,6 +9,7 @@ import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
 import { PHOTO_FRAME_PRESET } from './src/frame-preset';
 import { DeviceMotion } from 'expo-sensors';
+import { cutoutTarget } from './src/cutout-target';
 import { PhotoLiftPicker } from './src/PhotoLiftPicker';
 import { deviceCutout, deviceCutoutAvailable } from './src/device-cutout';
 import { COMPOSITION_VERSION } from './src/composition-scene';
@@ -74,6 +75,8 @@ function Editor() {
   const [interacting, setInteracting] = useState(false), [maskOpen, setMaskOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [status, setStatus] = useState<{ modelConfigured: boolean; creditsConfirmed: boolean; usage: Usage } | null>(null);
+  const [selectionView, setSelectionView] = useState<ProjectView | null>(null);
+  const [selectionStickerId, setSelectionStickerId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false), [point, setPoint] = useState<{ x: number; y: number } | null>(null);
   const [prompt, setPrompt] = useState('person'), [decorationPrompt, setDecorationPrompt] = useState('a purple crystal');
   const lock = useRef(false), alive = useRef(true);
@@ -133,7 +136,7 @@ function Editor() {
     const needsSelection = next.project.candidates.length > 1 && !next.project.selectedId;
     if (needsSelection) setActiveTool('subject');
     else if (view?.project.id !== next.project.id) setActiveTool(null);
-    setView(next); setDraft(next.options); setPicking(needsSelection); setPoint(null);
+    setView(next); setDraft(next.options); setSelectionView(null); setSelectionStickerId(null); setPicking(needsSelection); setPoint(null);
     setStatus(current => current ? { ...current, usage: next.usage } : current);
   };
   const task = async (label: string, action: () => Promise<void>) => {
@@ -187,23 +190,24 @@ function Editor() {
       setHistory([]); setMessage('배경 사진을 지웠어요. 선택한 배경색을 사용해요.');
     });
   };
-  const cutOnDevice = async (selectedPoint: { x: number; y: number } | null = null, assetId: string | null = null) => {
+  const cutOnDevice = async (selectedPoint: { x: number; y: number } | null = null, assetId: string | null = null, stickerId: string | null = null) => {
     if (!view || lock.current) return;
     if (pendingJob) throw new Error('앞선 AI 작업이 끝난 뒤 자동 분리해 주세요.');
     lock.current = true; setDeviceCutoutError(''); setCutoutNotice({ state: 'working', text: '피사체를 찾고 있어요… 손을 떼도 돼요.' }); Vibration.vibrate(25); setBusy('기기에서 피사체를 분리하는 중'); setMessage('기기에서 자동 분리 중이에요. 첫 실행은 모델 준비에 시간이 걸릴 수 있어요.');
     try {
       await previewFlight.current; await savePendingOptions();
-      const source = assetId ? view.pendingPhoto?.id === assetId ? view.pendingPhoto.source : null : view.source;
+      const target = stickerId ? selectionStickerId === stickerId && view.stickers?.some(item => item.id === stickerId) ? selectionView : null : view;
+      const source = assetId ? view.pendingPhoto?.id === assetId ? view.pendingPhoto.source : null : target?.source;
       if (!source) throw new Error('가져온 사진이 변경됐어요. 다시 열어 주세요.');
       const result = await deviceCutout(source, selectedPoint);
-      const next = await request<ProjectView>(connection, '/cutout/device', { projectId: view.project.id, assetId, sourceFile: view.project.sourceFile || 'source.png', baseRevision: view.project.maskRevision || 0, ...result });
+      const next = await request<ProjectView>(connection, '/cutout/device', { projectId: view.project.id, assetId, stickerId, sourceFile: view.project.sourceFile || 'source.png', baseRevision: (target || view).project.maskRevision || 0, ...result });
       accept(next); setHistory([]); setMaskOpen(false); setImportPicking(false); setPicking(false);
-      setActiveStickerId(assetId ? next.stickers?.at(-1)?.id || 'primary' : 'primary');
+      setActiveStickerId(stickerId || (assetId ? next.stickers?.at(-1)?.id || 'primary' : 'primary'));
       setCutoutNotice({ state: 'success', text: '분리 완료! 피사체를 끌어서 옮겨 보세요.' }); Vibration.vibrate([0, 20, 70, 20]);
       setMessage('기기 자동 누끼를 적용했어요. Meta 호출 없이 분리했으며 기존 스티커와 배경은 유지돼요.');
     } catch (error) { setDeviceCutoutError(error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'); throw error; } finally { lock.current = false; setBusy(''); }
   };
-  const autoCut = (point: { x: number; y: number } | null = null, assetId: string | null = null) => { void cutOnDevice(point, assetId).catch(error => { const text = error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'; setMessage(text); setCutoutNotice({ state: 'error', text }); Vibration.vibrate(80); }); };
+  const autoCut = (point: { x: number; y: number } | null = null, assetId: string | null = null, stickerId: string | null = null) => { void cutOnDevice(point, assetId, stickerId).catch(error => { const text = error instanceof Error ? error.message : '자동 분리를 완료하지 못했어요.'; setMessage(text); setCutoutNotice({ state: 'error', text }); Vibration.vibrate(80); }); };
   const toggleSpatial = () => {
     if (!draft) return;
     if (draft.spatialEnabled) { render({ ...draft, spatialEnabled: false }); return; }
@@ -321,7 +325,7 @@ function Editor() {
   }); };
   const screen = editorLayout(rootHeight, !!activeTool && !maskOpen, keyboardOpen);
   const output = view ? photoLayout(view.project, draft || view.options) : null;
-  const ratio = view ? (picking ? view.project.width / view.project.height : output!.width / output!.height) : 4 / 5;
+  const ratio = view ? (picking ? (selectionView || view).project.width / (selectionView || view).project.height : output!.width / output!.height) : 4 / 5;
   const canvasSize = fitCanvas(stage.width, stage.height, ratio, screen.showRail);
   const selectTool = (id: ToolId) => {
     Keyboard.dismiss();
@@ -334,6 +338,22 @@ function Editor() {
     const photo = next.pendingPhoto;
     setMaskTarget({ ...next, source: photo.source, subject: null, project: { ...next.project, width: photo.width, height: photo.height, candidates: [], selectedId: null } });
     setImportPicking(true); setCutoutNotice(null); setDeviceCutoutError(''); setEditingAssetId(photo.id); setMaskStickerId(null); setOutlineOpen(true); setPicking(false); setActiveTool(null); setMaskOpen(true);
+  };
+  const openTargetSelection = () => {
+    if (picking) { setPicking(false); setSelectionView(null); setSelectionStickerId(null); return; }
+    if (!view || !draft) return;
+    const target = cutoutTarget(view, draft, activeStickerId);
+    setPoint(null); setSelectionView(null); setSelectionStickerId(null);
+    if (!target) { const text = '분리할 사진이 없어요. 사진을 추가하거나 메인 사진을 변경해 주세요.'; setMessage(text); setCutoutNotice({ state: 'error', text }); return; }
+    if (target.kind === 'import') { openImported(); return; }
+    if (target.kind === 'primary') { setPicking(true); return; }
+    void task('선택한 스티커의 원본을 여는 중', async () => {
+      await savePendingOptions();
+      const next = await request<ProjectView>(connection, '/stickers/edit', { projectId: view.project.id, stickerId: target.id });
+      setSelectionView({ ...next, project: { ...next.project, candidates: [], selectedId: null } });
+      setSelectionStickerId(target.id); setActiveStickerId(target.id); setPicking(true);
+      setMessage('선택한 스티커의 원본이에요. 남길 피사체를 꾹 누르면 이 스티커만 다시 분리해요.');
+    });
   };
   const openMask = (outline = false) => {
     if (!view) return;
@@ -383,7 +403,7 @@ function Editor() {
     <View style={styles.stage} onLayout={event => setStage({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height })}>
       <View style={[styles.canvasArea, maskOpen && { paddingTop: 12, paddingBottom: 12, paddingHorizontal: 12 }]}>
         {maskOpen && view ? (importPicking && maskTarget ? <PhotoLiftPicker key={editingAssetId} view={maskTarget} disabled={disabled || !!pendingJob} onLift={point => autoCut(point, editingAssetId)} onManual={() => { setImportPicking(false); setCutoutNotice(null); }} onClose={() => { setMaskOpen(false); setCutoutNotice(null); }} /> : <MaskEditor key={outlineOpen ? 'outline' : 'erase'} embedded outline={outlineOpen} visible view={maskTarget || view} onClose={() => setMaskOpen(false)} onApply={outlineOpen ? cutSticker : strokes => correctMask(strokes)} onReset={() => correctMask([], true)} />) : view ? <View style={[styles.canvas, { width: canvasSize.width, height: canvasSize.height }]}>
-          {picking ? <SourcePicker onAutoCutout={autoCut} view={view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas onAutoCutout={autoCut} calibration={spatialCalibration} compact touchEnabled={!draft?.spatialEnabled} activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
+          {picking ? <SourcePicker key={selectionStickerId || view.project.sourceFile || view.project.id} onAutoCutout={point => autoCut(point, null, selectionStickerId)} view={selectionView || view} point={point} onPoint={setPoint} disabled={disabled} /> : <GestureCanvas onAutoCutout={autoCut} calibration={spatialCalibration} compact touchEnabled={!draft?.spatialEnabled} activeStickerId={activeStickerId} onSelectSticker={setActiveStickerId} trashBounds={trashBounds} onTrashState={next => setTrashState(previous => previous.visible === next.visible && previous.over === next.over ? previous : next)} onDropDelete={dropDelete} onReorder={(id, direction) => { if (draft) render(moveLayer(draft, id, direction, orderedLayers(draft).filter(key => key !== 'primary' || (!draft.hidePrimary && (!!view.subject || draft.mode === 'plain'))))); }} compare={compare} view={view} options={draft || view.options} disabled={disabled} onInteracting={value => { setInteracting(value); if (value) setTrashBounds(null); }} onCommit={options => render(options)} />}
           {view.project.provenance === 'synthetic-fixture' && <View pointerEvents="none" style={styles.fixtureBadge}><Text numberOfLines={1} style={styles.fixtureText}>연습용 · AI 분리 아님</Text></View>}
         </View> : <View style={styles.empty}>
           {stage.height > 320 && <Text style={styles.emptyMark}>↗</Text>}
@@ -421,8 +441,8 @@ function Editor() {
           {layerPicker}
           <Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? '처음 자를 때는 편집 화면에서 피사체를 0.6초 꾹 눌러요. 다시 자르려면 대상 선택에서 원본을 꾹 눌러요.' : '꾹 눌러 자동 분리는 설치형 개발 빌드에서 사용해요.')}</Text>
           <Button title="테두리로 자르기" disabled={disabled} onPress={() => openMask(true)} />
-          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
-          <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
+          <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={openTargetSelection} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
+          <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob || (picking && !!selectionStickerId)} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>
           <Text style={styles.help}>{picking ? (point ? '누른 점을 기준으로 분리해요.' : '사진에서 분리할 대상을 눌러주세요.') : '분리한 피사체를 다듬거나 다시 선택할 수 있어요.'} AI 분리 시 사진을 Meta에 전송합니다.</Text>
           {view.project.candidates.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>{view.project.candidates.map(candidate => <Button key={candidate.id} title={candidate.label} secondary selected={view.project.selectedId === candidate.id} disabled={disabled} onPress={() => { void task('대상을 선택하는 중', async () => { await savePendingOptions(); accept(await request<ProjectView>(connection, '/select', { projectId: view.project.id, candidateId: candidate.id })); setMessage('선택한 피사체를 적용했어요.'); }); }} />)}</ScrollView>}
           {!modelsAllowed && <Text style={styles.help}>AI 연결 준비 중 · 기본 편집과 연습용 그림은 사용할 수 있어요.</Text>}

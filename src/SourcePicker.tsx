@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ProjectView } from './client';
 import { pageImagePoint } from './layout';
@@ -7,22 +7,26 @@ import type { BrushPoint } from './layout';
 type Props = { onAutoCutout?: (point: BrushPoint) => void; view: ProjectView; point: BrushPoint | null; onPoint: (point: BrushPoint) => void; disabled: boolean };
 export function SourcePicker(props: Props) {
   const canvas = useRef<React.ComponentRef<typeof View>>(null), current = useRef(props);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   current.current = props;
   const [width, setWidth] = useState(300);
   const height = width * props.view.project.height / props.view.project.width;
   return <Pressable ref={canvas} collapsable={false} disabled={props.disabled} accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onLayout={event => setWidth(event.nativeEvent.layout.width)} delayLongPress={600} onLongPress={event => {
     const { pageX: touchX, pageY: touchY } = event.nativeEvent;
     const project = current.current.view.project;
+    const source = current.current.view.source;
     canvas.current?.measure((_x, _y, width, height, pageX, pageY) => {
-      if (current.current.view.project.id !== project.id) return;
+      if (!mounted.current || current.current.disabled || current.current.view.project.id !== project.id || current.current.view.source !== source) return;
       const point = pageImagePoint(touchX, touchY, { pageX, pageY, width, height }, project);
       if (point) current.current.onAutoCutout?.(point);
     });
   }} onPress={event => {
     const { pageX: touchX, pageY: touchY } = event.nativeEvent;
     const project = current.current.view.project;
+    const source = current.current.view.source;
     canvas.current?.measure((_x, _y, measuredWidth, measuredHeight, pageX, pageY) => {
-      if (current.current.view.project.id !== project.id) return;
+      if (!mounted.current || current.current.disabled || current.current.view.project.id !== project.id || current.current.view.source !== source) return;
       const point = pageImagePoint(touchX, touchY, { pageX, pageY, width: measuredWidth, height: measuredHeight }, project);
       if (point) current.current.onPoint(point);
     });
