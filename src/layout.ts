@@ -1,7 +1,8 @@
+import { rotatePoint, rotatedRect, wrapAngle } from './rotation.ts';
 import { frameMatrix, unprojectFrame } from './frame.ts';
-export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; frameScale?: number; frameX?: number; frameY?: number; tilt?: number; depth?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
+export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; frameScale?: number; frameX?: number; frameY?: number; tilt?: number; depth?: number; photoRotation?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
 export type Dimensions = { width: number; height: number };
-export type StickerTransform = { id: string; x: number; y: number; scale: number };
+export type StickerTransform = { id: string; x: number; y: number; scale: number; rotation?: number };
 export type NormalizedBounds = { x: number; y: number; width: number; height: number };
 export function backgroundPhotoRect(source: Dimensions, canvas: Dimensions, options: { backgroundZoom?: number; backgroundX?: number; backgroundY?: number }) {
   const factor = Math.max(canvas.width / source.width, canvas.height / source.height) * (options.backgroundZoom || 1);
@@ -13,13 +14,16 @@ const visibleShift = (start: number, length: number, total: number, minimum: num
   return start + length < keep ? keep - start - length : start > total - keep ? total - keep - start : 0;
 };
 export function keepStickerVisible(source: Dimensions, transform: StickerTransform, canvas: Dimensions, minimum = 140): StickerTransform {
-  const r = stickerRect(source, transform, canvas);
+  const r = rotatedRect(stickerRect(source, transform, canvas), transform.rotation || 0);
   return { ...transform, x: Math.max(-0.3, Math.min(1.3, transform.x + visibleShift(r.x, r.width, canvas.width, minimum) / canvas.width)), y: Math.max(-0.3, Math.min(1.3, transform.y + visibleShift(r.y, r.height, canvas.height, minimum) / canvas.height)) };
 }
 export function projectedPhotoRect(source: Dimensions, options: PhotoLayoutOptions, bounds: NormalizedBounds = { x: 0, y: 0, width: 1, height: 1 }) {
   const g = photoLayout(source, options), p = g.photo, m = frameMatrix(options);
   const x = p.x + bounds.x * p.width, y = p.y + bounds.y * p.height, w = p.width * bounds.width, h = p.height * bounds.height;
-  const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => ({ x: m.a * (px - g.width / 2) + m.c * (py - g.height / 2) + g.width / 2, y: m.b * (px - g.width / 2) + m.d * (py - g.height / 2) + g.height / 2 }));
+  const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([px, py]) => {
+    const point = rotatePoint({ x: px, y: py }, { x: p.x + p.width / 2, y: p.y + p.height / 2 }, options.photoRotation || 0);
+    return { x: m.a * (point.x - g.width / 2) + m.c * (point.y - g.height / 2) + g.width / 2, y: m.b * (point.x - g.width / 2) + m.d * (point.y - g.height / 2) + g.height / 2 };
+  });
   return { x: Math.min(...corners.map(p => p.x)), y: Math.min(...corners.map(p => p.y)), width: Math.max(...corners.map(p => p.x)) - Math.min(...corners.map(p => p.x)), height: Math.max(...corners.map(p => p.y)) - Math.min(...corners.map(p => p.y)) };
 }
 export function keepPhotoVisible<T extends PhotoLayoutOptions>(source: Dimensions, options: T, bounds?: NormalizedBounds, minimum = 140): T {
@@ -33,13 +37,14 @@ export function stickerRect(source: Dimensions, transform: StickerTransform, can
   const width = Math.max(1, Math.round(source.width * factor)), height = Math.max(1, Math.round(source.height * factor));
   return { x: Math.round(transform.x * canvas.width - width / 2), y: Math.round(transform.y * canvas.height - height / 2), width, height };
 }
-export function gestureSticker(initial: StickerTransform, source: Dimensions, canvas: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }): StickerTransform {
-  if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
+export function gestureSticker(initial: StickerTransform, source: Dimensions, canvas: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number; rotation?: number }): StickerTransform {
+  if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, (gesture.rotation ?? 0), gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
   const units = canvas.width / displayWidth, before = stickerRect(source, initial, canvas);
   const scale = Math.min(2.5, Math.max(0.08, initial.scale * gesture.factor)), factor = scale / initial.scale;
-  const x = gesture.anchorX * units - (gesture.anchorX * units - (before.x + before.width / 2)) * factor + gesture.dx * units;
-  const y = gesture.anchorY * units - (gesture.anchorY * units - (before.y + before.height / 2)) * factor + gesture.dy * units;
-  return keepStickerVisible(source, { ...initial, scale, x: Math.min(1.3, Math.max(-0.3, x / canvas.width)), y: Math.min(1.3, Math.max(-0.3, y / canvas.height)) }, canvas);
+  const anchor = { x: gesture.anchorX * units, y: gesture.anchorY * units };
+  const center = rotatePoint({ x: anchor.x + (before.x + before.width / 2 - anchor.x) * factor, y: anchor.y + (before.y + before.height / 2 - anchor.y) * factor }, anchor, gesture.rotation || 0);
+  const x = center.x + gesture.dx * units, y = center.y + gesture.dy * units;
+  return keepStickerVisible(source, { ...initial, ...(gesture.rotation ? { rotation: wrapAngle((initial.rotation || 0) + gesture.rotation) } : {}), scale, x: Math.min(1.3, Math.max(-0.3, x / canvas.width)), y: Math.min(1.3, Math.max(-0.3, y / canvas.height)) }, canvas);
 }
 export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   const width = 1080, height = options.ratio === 'story' ? 1920 : options.ratio === 'square' ? 1080 : 1350;
@@ -53,8 +58,8 @@ export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   return { width, height, screen, photo };
 }
 const bound = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
-export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number }, bounds?: NormalizedBounds): T {
-  if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
+export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number; rotation?: number }, bounds?: NormalizedBounds): T {
+  if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, (gesture.rotation ?? 0), gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
   const before = photoLayout(source, initial);
   const display = { width: displayWidth, height: displayWidth * before.height / before.width };
   const anchor = unprojectFrame({ x: gesture.anchorX, y: gesture.anchorY }, display, initial);
@@ -63,9 +68,11 @@ export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: D
   const zoom = bound(initial.zoom * gesture.factor, 0.8, 2.4);
   const factor = zoom / initial.zoom, units = before.width / displayWidth;
   const after = photoLayout(source, { ...initial, zoom });
-  const desiredX = gesture.anchorX * units - (gesture.anchorX * units - before.photo.x) * factor + gesture.dx * units;
-  const desiredY = gesture.anchorY * units - (gesture.anchorY * units - before.photo.y) * factor + gesture.dy * units;
-  return keepPhotoVisible(source, { ...initial, zoom, x: bound(initial.x + (desiredX - after.photo.x) / after.screen.width, -0.8, 0.8), y: bound(initial.y + (desiredY - after.photo.y) / after.screen.height, -0.8, 0.8) }, bounds);
+  const pivot = { x: gesture.anchorX * units, y: gesture.anchorY * units };
+  const center = rotatePoint({ x: pivot.x + (before.photo.x + before.photo.width / 2 - pivot.x) * factor, y: pivot.y + (before.photo.y + before.photo.height / 2 - pivot.y) * factor }, pivot, gesture.rotation || 0);
+  const desiredX = center.x + gesture.dx * units - after.photo.width / 2;
+  const desiredY = center.y + gesture.dy * units - after.photo.height / 2;
+  return keepPhotoVisible(source, { ...initial, ...(gesture.rotation ? { photoRotation: wrapAngle((initial.photoRotation || 0) + gesture.rotation) } : {}), zoom, x: bound(initial.x + (desiredX - after.photo.x) / after.screen.width, -0.8, 0.8), y: bound(initial.y + (desiredY - after.photo.y) / after.screen.height, -0.8, 0.8) }, bounds);
 }
 
 export type BrushPoint = { x: number; y: number };

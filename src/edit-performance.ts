@@ -7,8 +7,8 @@ export function sameBase(a: EditOptions, b: EditOptions) {
   const { stickerTransforms: _a, layerOrder: _la, ...left } = a, { stickerTransforms: _b, layerOrder: _lb, ...right } = b;
   return stable(left) === stable(right);
 }
-export function meaningfulGesture(dx: number, dy: number, factor: number) {
-  return Math.hypot(dx, dy) >= 6 || Math.abs(factor - 1) >= 0.02;
+export function meaningfulGesture(dx: number, dy: number, factor: number, rotation = 0) {
+  return Math.hypot(dx, dy) >= 6 || Math.abs(factor - 1) >= 0.02 || Math.abs(rotation) >= 2;
 }
 export function rebaseOptions(saved: EditOptions, view: ProjectView): EditOptions {
   const ids = (view.stickers || []).map(item => item.id);

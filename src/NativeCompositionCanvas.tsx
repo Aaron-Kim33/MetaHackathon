@@ -13,20 +13,21 @@ import { spatialOffset } from './spatial-motion';
 
 type RectBox = { x: number; y: number; width: number; height: number };
 class ImagePose {
-  readonly x: Animated.Value; readonly y: Animated.Value; readonly sx: Animated.Value; readonly sy: Animated.Value;
+  readonly x: Animated.Value; readonly y: Animated.Value; readonly sx: Animated.Value; readonly sy: Animated.Value; readonly rotation: Animated.Value;
   private native = false;
   private rect: RectBox;
-  constructor(rect: RectBox, readonly width: number, readonly height: number, readonly unit: number) {
-    this.rect = rect;
+  constructor(rect: RectBox, readonly width: number, readonly height: number, readonly unit: number, private angle = 0) {
+    this.rect = rect; this.rotation = new Animated.Value(angle);
     this.x = new Animated.Value(rect.x * unit); this.y = new Animated.Value(rect.y * unit);
     this.sx = new Animated.Value(rect.width / width); this.sy = new Animated.Value(rect.height / height);
   }
   activate() {
     if (this.native) return; this.native = true;
-    const values: [Animated.Value, number][] = [[this.x, this.rect.x * this.unit], [this.y, this.rect.y * this.unit], [this.sx, this.rect.width / this.width], [this.sy, this.rect.height / this.height]];
+    const values: [Animated.Value, number][] = [[this.rotation, this.angle], [this.x, this.rect.x * this.unit], [this.y, this.rect.y * this.unit], [this.sx, this.rect.width / this.width], [this.sy, this.rect.height / this.height]];
     for (const [value, toValue] of values) Animated.timing(value, { toValue, duration: 0, useNativeDriver: true }).start();
   }
-  update(rect: RectBox) {
+  update(rect: RectBox, angle = 0) {
+    if (angle !== this.angle) { this.angle = angle; this.rotation.setValue(angle); }
     if (rect.x === this.rect.x && rect.y === this.rect.y && rect.width === this.rect.width && rect.height === this.rect.height) return;
     this.rect = rect;
     this.x.setValue(rect.x * this.unit); this.y.setValue(rect.y * this.unit);
@@ -38,7 +39,7 @@ const Texture = memo(function Texture({ source, pose, left = 0, top = 0, dx = 0,
   const style = useMemo(() => ({
     position: 'absolute' as const, left: 0, top: 0, width: pose.width * pose.unit, height: pose.height * pose.unit, opacity,
     transformOrigin: [0, 0, 0] as [number, number, number],
-    transform: [{ translateX: Animated.add(pose.x, (dx - left) * pose.unit) }, { translateY: Animated.add(pose.y, (dy - top) * pose.unit) }, { scaleX: pose.sx }, { scaleY: pose.sy }],
+    transform: [{ translateX: Animated.add(Animated.add(pose.x, Animated.multiply(pose.sx, pose.width * pose.unit / 2)), (dx - left) * pose.unit) }, { translateY: Animated.add(Animated.add(pose.y, Animated.multiply(pose.sy, pose.height * pose.unit / 2)), (dy - top) * pose.unit) }, { rotate: pose.rotation.interpolate({ inputRange: [-180, 180], outputRange: ['-180deg', '180deg'] }) }, { scaleX: pose.sx }, { scaleY: pose.sy }, { translateX: -pose.width * pose.unit / 2 }, { translateY: -pose.height * pose.unit / 2 }],
   }), [pose, left, top, dx, dy, opacity]);
   return <Animated.Image pointerEvents="none" source={source} resizeMode="stretch" resizeMethod="none" fadeDuration={0} renderToHardwareTextureAndroid style={style} />;
 });
@@ -68,20 +69,20 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
     if (!cached || cached.data !== data) { cached = { data, source: { uri: `data:image/png;base64,${data}` } }; sources.current.set(key, cached); }
     return cached.source;
   };
-  const pose = (id: string, size: { width: number; height: number }, rect: RectBox) => {
+  const pose = (id: string, size: { width: number; height: number }, rect: RectBox, rotation = 0) => {
     let value = poses.get(id);
-    if (!value || value.width !== size.width || value.height !== size.height) { value = new ImagePose(rect, size.width, size.height, unit); poses.set(id, value); }
+    if (!value || value.width !== size.width || value.height !== size.height) { value = new ImagePose(rect, size.width, size.height, unit, rotation); poses.set(id, value); }
     return value;
   };
-  const photoPose = pose('primary', view.project, plan.photo);
+  const photoPose = pose('primary', view.project, plan.photo, options.photoRotation);
   for (const sticker of view.stickers || []) {
     const t = options.stickerTransforms.find(t => t.id === sticker.id);
-    if (t) pose(sticker.id, sticker, stickerRect(sticker, t, plan));
+    if (t) pose(sticker.id, sticker, stickerRect(sticker, t, plan), t.rotation);
   }
   const update = (next: EditOptions) => {
     const g = nativeCompositionPlan(view.project, next);
-    poses.get('primary')?.update(g.photo);
-    for (const t of next.stickerTransforms) { const item = view.stickers?.find(s => s.id === t.id); if (item) poses.get(t.id)?.update(stickerRect(item, t, g)); }
+    poses.get('primary')?.update(g.photo, next.photoRotation);
+    for (const t of next.stickerTransforms) { const item = view.stickers?.find(s => s.id === t.id); if (item) poses.get(t.id)?.update(stickerRect(item, t, g), t.rotation); }
     if (view.backgroundPhoto) poses.get('background')?.update(backgroundPhotoRect(view.backgroundPhoto, g, next));
     if (view.decorationImage) {
       const w = Math.round(g.width * next.decorationScale), h = Math.round(w * view.decorationImage.height / view.decorationImage.width);

@@ -6,7 +6,7 @@ export type EditOptions = {
   backgroundZoom: number; backgroundX: number; backgroundY: number; backgroundDim: number;
   layerOrder: string[];
   hidePrimary: boolean;
-  tilt: number; depth: number;
+  tilt: number; depth: number; photoRotation?: number;
   stickerTransforms: import('./layout').StickerTransform[];
   mode: 'plain' | 'frame' | 'sticker';
   ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number; shadow: number; background: string;

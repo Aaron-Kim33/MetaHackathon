@@ -1,4 +1,4 @@
-export type CanvasTouch = { x: number; y: number; count: number; distance: number };
+export type CanvasTouch = { x: number; y: number; count: number; distance: number; angle?: number };
 export type LocalCanvasTouch = CanvasTouch & { localX: number; localY: number; displayWidth: number };
 export type CanvasBounds = { pageX: number; pageY: number; width: number; height: number };
 export class MeasuredCanvasTouch {

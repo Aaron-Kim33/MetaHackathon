@@ -4,12 +4,17 @@ import { backgroundPhotoRect, photoLayout, stickerRect } from './layout.ts';
 import type { Dimensions } from './layout';
 import { orderedLayers } from './layer-order.ts';
 import { compositionClips, compositionShadowOffset } from './composition-geometry.ts';
-export const COMPOSITION_VERSION = 3;
+export const COMPOSITION_VERSION = 4;
 export type SceneNode = { key: string; type: 'text' | 'path' | 'g' | 'rect' | 'circle' | 'ellipse' | 'image' | 'clipPath' | 'linearGradient' | 'radialGradient' | 'stop'; attrs: Record<string, string | number>; asset?: string; text?: string; children?: SceneNode[] };
 export type SceneContent = { source: Dimensions; backdrop?: Dimensions | null; subject: boolean; shadow: boolean; decoration?: Dimensions | null; stickers: (Dimensions & { id: string })[] };
 export type CompositionScene = { width: number; height: number; defs: SceneNode[]; background: SceneNode[]; primary: SceneNode[]; layers: SceneNode[] };
 const node = (key: string, type: SceneNode['type'], attrs: SceneNode['attrs'], children?: SceneNode[]): SceneNode => ({ key, type, attrs, children });
 const image = (key: string, asset: string, attrs: SceneNode['attrs']): SceneNode => ({ key, type: 'image', attrs: { ...attrs, preserveAspectRatio: 'none' }, asset });
+const rotatedImage = (key: string, asset: string, attrs: SceneNode['attrs'], angle = 0): SceneNode => {
+  if (!angle) return image(key, asset, attrs);
+  const { clipPath, ...rest } = attrs;
+  return node(key, 'g', clipPath ? { clipPath } : {}, [image(key + '-pixels', asset, { ...rest, transform: 'rotate(' + angle + ' ' + (Number(attrs.x) + Number(attrs.width) / 2) + ' ' + (Number(attrs.y) + Number(attrs.height) / 2) + ')' })]);
+};
 export function buildCompositionScene(content: SceneContent, options: EditOptions): CompositionScene {
   const g = photoLayout(content.source, options), { width, height, screen: q, photo } = g;
   const matrix = frameMatrix(options), cx = width / 2, cy = height / 2;
@@ -31,7 +36,7 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
       node('phone-depth', 'rect', { x: q.x - 14 + extrusion, y: q.y - 38 + extrusion, width: q.width + 28, height: q.height + 82, rx: 50, fill: '#62735a' }),
       node('phone-case', 'rect', { x: q.x - 14, y: q.y - 38, width: q.width + 28, height: q.height + 82, rx: 50, fill: 'url(#scene-metal)' }),
       node('phone-face', 'rect', { x: q.x - 7, y: q.y - 32, width: q.width + 14, height: q.height + 70, rx: 44, fill: '#111313' }),
-      ...(!options.hidePrimary ? [image('screen-photo', 'source', { ...photo, clipPath: 'url(#scene-screen)' })] : []),
+      ...(!options.hidePrimary ? [rotatedImage('screen-photo', 'source', { ...photo, clipPath: 'url(#scene-screen)' }, options.photoRotation)] : []),
       node('phone-highlight', 'rect', { x: q.x - 12, y: q.y - 36, width: q.width + 24, height: q.height + 78, rx: 48, fill: 'none', stroke: '#edf1df', strokeOpacity: 0.7, strokeWidth: 2 }),
       label('status-time', '9:41', q.x + 24, q.y - 10, 12),
       node('camera-pill', 'rect', { x: q.x + q.width / 2 - 33, y: q.y - 27, width: 66, height: 12, rx: 6, fill: '#050606' }),
@@ -47,9 +52,9 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
   }
   if (!options.hidePrimary) {
     if (content.subject) {
-      if (options.mode === 'frame' && content.shadow && options.shadow > 0) primary.push(image('subject-shadow', 'shadow', { x: photo.x + shadowOffset.x, y: photo.y + shadowOffset.y, width: photo.width, height: photo.height, opacity: options.shadow, clipPath: 'url(#scene-screen)' }));
-      primary.push(image('subject', 'subject', { ...photo, ...(options.mode === 'frame' ? { clipPath: 'url(#scene-escape)' } : {}) }));
-    } else if (options.mode === 'plain') primary.push(image('plain-photo', 'source', photo));
+      if (options.mode === 'frame' && content.shadow && options.shadow > 0) primary.push(rotatedImage('subject-shadow', 'shadow', { x: photo.x + shadowOffset.x, y: photo.y + shadowOffset.y, width: photo.width, height: photo.height, opacity: options.shadow, clipPath: 'url(#scene-screen)' }, options.photoRotation));
+      primary.push(rotatedImage('subject', 'subject', { ...photo, ...(options.mode === 'frame' ? { clipPath: 'url(#scene-escape)' } : {}) }, options.photoRotation));
+    } else if (options.mode === 'plain') primary.push(rotatedImage('plain-photo', 'source', photo, options.photoRotation));
   }
   if (content.decoration) {
     const w = Math.round(width * options.decorationScale), h = Math.round(w * content.decoration.height / content.decoration.width);
@@ -61,7 +66,7 @@ export function buildCompositionScene(content: SceneContent, options: EditOption
   const layers = orderedLayers(options).flatMap(id => {
     if (id === 'primary') return [primaryPlane];
     const sticker = content.stickers.find(item => item.id === id), t = options.stickerTransforms.find(item => item.id === id);
-    return sticker && t ? [image(`sticker-${id}`, `sticker:${id}`, stickerRect(sticker, t, g))] : [];
+    return sticker && t ? [rotatedImage(`sticker-${id}`, `sticker:${id}`, stickerRect(sticker, t, g), t.rotation)] : [];
   });
   return { width, height, defs, background: base, primary: [primaryPlane], layers };
 }

@@ -6,7 +6,7 @@ import { insist } from './errors.mjs';
 import { orderedLayers } from '../src/layer-order.ts';
 import { photoLayout } from '../src/layout.ts';
 
-export const DEFAULTS = Object.freeze({ ratio: 'portrait', ...PHOTO_FRAME_PRESET, backgroundZoom: 1, backgroundX: 0.5, backgroundY: 0.5, backgroundDim: 0.04, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
+export const DEFAULTS = Object.freeze({ ratio: 'portrait', photoRotation: 0, ...PHOTO_FRAME_PRESET, backgroundZoom: 1, backgroundX: 0.5, backgroundY: 0.5, backgroundDim: 0.04, background: '#EEE8DF', decorationDepth: 'front', decorationX: 0.76, decorationY: 0.35, decorationScale: 0.26 });
 
 export function settings(value = {}) {
   insist(value && typeof value === 'object' && !Array.isArray(value), '편집 설정이 올바르지 않아요.');
@@ -24,6 +24,7 @@ export function settings(value = {}) {
   for (const t of result.stickerTransforms) {
     insist(t && typeof t.id === 'string' && /^[a-f0-9-]{36}$/i.test(t.id) && !ids.has(t.id), '스티커 ID를 확인해 주세요.');
     ids.add(t.id);
+    insist(t.rotation === undefined || (Number.isFinite(t.rotation) && t.rotation >= -180 && t.rotation <= 180), '스티커 회전을 확인해 주세요.');
     insist([t.x, t.y, t.scale].every(Number.isFinite) && t.x >= -0.3 && t.x <= 1.3 && t.y >= -0.3 && t.y <= 1.3 && t.scale >= 0.08 && t.scale <= 2.5, '스티커 위치·크기를 확인해 주세요.');
   }
   for (const name of Object.keys(DEFAULTS)) if (Object.hasOwn(value, name)) result[name] = value[name];
@@ -36,7 +37,7 @@ export function settings(value = {}) {
   insist(['portrait', 'story', 'square'].includes(result.ratio), '지원하지 않는 비율이에요.');
   insist(/^#[0-9a-f]{6}$/i.test(result.background), '배경 색상을 확인해 주세요.');
   insist(['front', 'back'].includes(result.decorationDepth), '장식 순서를 확인해 주세요.');
-  for (const [name, min, max] of [['zoom', 0.8, 2.4], ['x', -0.8, 0.8], ['y', -0.8, 0.8], ['shadow', 0, 0.8], ['tilt', -18, 18], ['depth', 0, 1], ['frameScale', 0.7, 1.5], ['frameX', -0.35, 0.35], ['frameY', -0.25, 0.25], ['backgroundZoom', 1, 3], ['backgroundX', 0, 1], ['backgroundY', 0, 1], ['backgroundDim', 0, 0.5], ['decorationX', 0, 1], ['decorationY', 0, 1], ['decorationScale', 0.08, 0.65]]) {
+  for (const [name, min, max] of [['photoRotation', -180, 180], ['zoom', 0.8, 2.4], ['x', -0.8, 0.8], ['y', -0.8, 0.8], ['shadow', 0, 0.8], ['tilt', -18, 18], ['depth', 0, 1], ['frameScale', 0.7, 1.5], ['frameX', -0.35, 0.35], ['frameY', -0.25, 0.25], ['backgroundZoom', 1, 3], ['backgroundX', 0, 1], ['backgroundY', 0, 1], ['backgroundDim', 0, 0.5], ['decorationX', 0, 1], ['decorationY', 0, 1], ['decorationScale', 0.08, 0.65]]) {
     insist(Number.isFinite(result[name]) && result[name] >= min && result[name] <= max, `${name} 값이 허용 범위를 벗어났어요.`);
   }
   return result;

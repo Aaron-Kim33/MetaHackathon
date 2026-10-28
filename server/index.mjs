@@ -115,7 +115,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           insist(!jobs.active, 'AI 작업이 끝난 뒤 메인 사진을 변경해 주세요.', 409);
           const latest = await store.get(project.id), options = settings(latest.options || undefined);
           Object.assign(latest, { sourceFile, width: photo.width, height: photo.height, selectedId: null, candidates: [], maskEdits: {}, maskRevision: (latest.maskRevision || 0) + 1, provenance: 'user' });
-          latest.options = settings({ ...options, hidePrimary: false, zoom: options.mode === 'frame' ? 1.2 : 1, x: options.mode === 'frame' ? 0.18 : 0, y: options.mode === 'frame' ? -0.17 : 0 });
+          latest.options = settings({ ...options, hidePrimary: false, photoRotation: 0, zoom: options.mode === 'frame' ? 1.2 : 1, x: options.mode === 'frame' ? 0.18 : 0, y: options.mode === 'frame' ? -0.17 : 0 });
           await store.save(latest);
         });
         send(200, await view(project.id)); return;

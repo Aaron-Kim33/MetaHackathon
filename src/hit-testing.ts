@@ -1,3 +1,4 @@
+import { rotatePoint } from './rotation.ts';
 import type { EditOptions, ProjectView } from './client';
 import { orderedLayers } from './layer-order.ts';
 import { photoLayout, stickerRect } from './layout.ts';
@@ -21,17 +22,20 @@ export function hitLayer(view: ProjectView, options: EditOptions, point: { x: nu
   const cursor = { x: point.x * unit, y: point.y * unit }, primaryPoint = unprojectFrame(cursor, g, options);
   for (const id of orderedLayers(options).reverse()) {
     if (id === 'primary') {
-      if (options.hidePrimary || (!view.subject && options.mode !== 'plain')) continue;
+      if (options.hidePrimary || (!view.subject && options.mode === 'sticker')) continue;
       if (options.mode === 'frame' && primaryPoint.y > g.screen.y + g.screen.height) continue;
-      const u = (primaryPoint.x - g.photo.x) / g.photo.width, v = (primaryPoint.y - g.photo.y) / g.photo.height;
+      if (options.mode === 'frame' && !view.subject && (primaryPoint.x < g.screen.x || primaryPoint.x > g.screen.x + g.screen.width || primaryPoint.y < g.screen.y)) continue;
+      const local = rotatePoint(primaryPoint, { x: g.photo.x + g.photo.width / 2, y: g.photo.y + g.photo.height / 2 }, -(options.photoRotation || 0));
+      const u = (local.x - g.photo.x) / g.photo.width, v = (local.y - g.photo.y) / g.photo.height;
       if (opaqueHit(view.subject ? view.subjectHitMask : undefined, u, v)) return id;
     } else {
       const sticker = view.stickers?.find(item => item.id === id), t = options.stickerTransforms.find(item => item.id === id);
       if (!sticker || !t) continue;
       const r = stickerRect(sticker, t, g);
+      const local = rotatePoint(cursor, { x: r.x + r.width / 2, y: r.y + r.height / 2 }, -(t.rotation || 0));
       const slop = 6 * unit;
-      if (cursor.x < r.x - slop || cursor.y < r.y - slop || cursor.x > r.x + r.width + slop || cursor.y > r.y + r.height + slop) continue;
-      if (opaqueHit(sticker.hitMask, Math.max(0, Math.min(1, (cursor.x - r.x) / r.width)), Math.max(0, Math.min(1, (cursor.y - r.y) / r.height)))) return id;
+      if (local.x < r.x - slop || local.y < r.y - slop || local.x > r.x + r.width + slop || local.y > r.y + r.height + slop) continue;
+      if (opaqueHit(sticker.hitMask, Math.max(0, Math.min(1, (local.x - r.x) / r.width)), Math.max(0, Math.min(1, (local.y - r.y) / r.height)))) return id;
     }
   }
   return null;
