@@ -4,18 +4,18 @@ import { GLView } from 'expo-gl';
 import type { ExpoWebGLRenderingContext } from 'expo-gl';
 import * as FS from 'expo-file-system/legacy';
 import { useSpatialMotion } from './use-spatial-motion';
-import { depthCamera, depthMesh, surfaceMesh, surfaceBoundary, fixedDepthView } from './depth-mesh';
+import { CachedImage } from './CachedImage';
+import { depthCamera, depthMesh, surfaceMesh } from './depth-mesh';
 import type { DepthFrame } from './depth-mesh';
 const vertex = `
 precision highp float; attribute vec3 position; attribute vec2 uv; varying highp vec2 textureUV;
-uniform float aspect; uniform float viewScale; uniform vec4 camera;
+uniform float aspect; uniform vec4 camera;
 void main() {
   float cy=cos(camera.x), sy=sin(camera.x), cx=cos(camera.y), sx=sin(camera.y);
   vec3 p=vec3(cy*position.x+sy*position.z, position.y, -sy*position.x+cy*position.z);
   p=vec3(p.x, cx*p.y-sx*p.z, sx*p.y+cx*p.z);
   float distance=3.0-p.z;
   gl_Position=vec4(3.0*(p.x-camera.z)/aspect+camera.z*distance/aspect, 3.0*(p.y-camera.w)+camera.w*distance, distance*0.5-1.5, distance);
-  gl_Position.xy *= viewScale;
   textureUV=uv;
 }`;
 const fragment = `precision highp float; varying highp vec2 textureUV; uniform sampler2D photo; void main(){vec4 color=texture2D(photo,textureUV); if(color.a<0.004)discard; gl_FragColor=color;}`;
@@ -56,11 +56,9 @@ export default function DepthSpatialCanvas({ frame, strength, calibration }: { f
       };
       const a = frame.width / frame.height;
       const drawing: { item: ReturnType<typeof bindMesh>; texture: WebGLTexture }[] = [];
-      let boundary: number[][] = [];
       if (frame.layers?.length) {
         for (const surface of frame.layers) {
           const geometry = surfaceMesh(surface), texture = await load(surface.textureImage, surface.id, true);
-          if (surface.id === 'backdrop') boundary = surfaceBoundary(surface, geometry.vertices);
           if (!texture || closed) { cleanup(); return; }
           drawing.push({ item: bindMesh(geometry.vertices, geometry.indices), texture });
         }
@@ -74,23 +72,20 @@ export default function DepthSpatialCanvas({ frame, strength, calibration }: { f
       }
       if (!alive.current || closed) { cleanup(); return; }
       const camera = gl.getUniformLocation(program, 'camera'); gl.uniform1f(gl.getUniformLocation(program, 'aspect'), a); gl.uniform1i(gl.getUniformLocation(program, 'photo'), 0);
-      const viewScale = gl.getUniformLocation(program, 'viewScale');
-      let view = fixedDepthView(boundary,a,latest.current.strength), viewStrength = latest.current.strength;
-      gl.uniform1f(viewScale,view.scale);
-      gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.enableVertexAttribArray(position); gl.enableVertexAttribArray(uv); gl.disable(gl.CULL_FACE); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.clearColor(.93,.91,.87,1);
+      gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.enableVertexAttribArray(position); gl.enableVertexAttribArray(uv); gl.disable(gl.CULL_FACE); gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.clearColor(0,0,0,0);
       const draw = (item: ReturnType<typeof bindMesh>, texture: WebGLTexture) => { gl.bindBuffer(gl.ARRAY_BUFFER, item.vb); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, item.ib); gl.vertexAttribPointer(position,3,gl.FLOAT,false,20,0); gl.vertexAttribPointer(uv,2,gl.FLOAT,false,20,12); gl.bindTexture(gl.TEXTURE_2D,texture); gl.drawElements(gl.TRIANGLES,item.count,gl.UNSIGNED_SHORT,0); };
       const render = () => {
         if (!alive.current || closed) return;
         const t = Date.now() / 1000;
         const input = latest.current.motion.status === 'reduced' ? { x: 0, y: 0 } : latest.current.tour ? { x: Math.sin(t * .75) * .9, y: Math.sin(t * .47) * .55 } : latest.current.motion;
-        if (latest.current.strength !== viewStrength) { viewStrength = latest.current.strength; view = fixedDepthView(boundary,a,viewStrength); }
-        const c = depthCamera(input, latest.current.strength * view.motionLimit);
+        const c = depthCamera(input, latest.current.strength);
         gl.viewport(0,0,gl.drawingBufferWidth,gl.drawingBufferHeight); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.uniform4f(camera,c.yaw,c.pitch,c.shiftX,c.shiftY); for (const d of drawing) draw(d.item,d.texture); gl.endFrameEXP(); loop=requestAnimationFrame(render);
       };
       render();
     } catch (failure) { cleanup(); if (__DEV__) console.error('Spatial preview initialization failed', failure); if (alive.current) setError(failure instanceof Error ? failure.message : '3D 화면을 표시하지 못했어요.'); }
   };
   return <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+    <CachedImage pointerEvents="none" data={frame.farImage} blurRadius={24} resizeMode="cover" style={StyleSheet.absoluteFill} />
     <GLView style={StyleSheet.absoluteFill} onContextCreate={start} msaaSamples={0} />
     <View style={{ position:'absolute',top:12,left:12,right:72,padding:10,borderRadius:12,backgroundColor:'#19171FDF',flexDirection:'row',gap:8,alignItems:'center' }}>
       <View style={{ width:26,height:26,borderRadius:13,borderWidth:1,borderColor:'#8C80A0',alignItems:'center',justifyContent:'center' }}><View style={{ width:7,height:7,borderRadius:4,backgroundColor:motion.status==='active'?'#ADFFD3':'#F4C47D',transform:[{translateX:motion.x*8},{translateY:motion.y*8}] }} /></View>

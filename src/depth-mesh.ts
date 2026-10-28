@@ -14,46 +14,6 @@ export function surfaceMesh(surface: DepthSurface) {
   for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) { const a = y * w + x; indices.push(a,a+w,a+1,a+1,a+w,a+w+1); }
   return { vertices, indices: new Uint16Array(indices), edges: [] };
 }
-export function surfaceBoundary(surface: DepthSurface, vertices: Float32Array) {
-  const w = surface.relief ? surface.gridWidth : 2, h = surface.relief ? surface.gridHeight : 2;
-  const ids: number[] = [];
-  for (let x = 0; x < w; x++) ids.push(x);
-  for (let y = 1; y < h; y++) ids.push(y * w + w - 1);
-  for (let x = w - 2; x >= 0; x--) ids.push((h - 1) * w + x);
-  for (let y = h - 2; y > 0; y--) ids.push(y * w);
-  return ids.map(i => [...vertices.slice(i * 5, i * 5 + 3)]);
-}
-export const DEPTH_VIEW_SCALE = 1.08;
-function insidePolygon(x: number, y: number, polygon: { x: number; y: number }[]) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i], b = polygon[j];
-    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
-}
-export function depthViewportCovered(boundary: number[][], aspect: number, camera: ReturnType<typeof depthCamera>, scale = DEPTH_VIEW_SCALE) {
-  if (!boundary.length) return true;
-  const polygon = boundary.map(p => projectDepthPoint(p, aspect, camera));
-  const edge = 1.002 / scale;
-  for (const t of [-1,-.5,0,.5,1]) {
-    if (!insidePolygon(t*edge,-edge,polygon) || !insidePolygon(t*edge,edge,polygon) || !insidePolygon(-edge,t*edge,polygon) || !insidePolygon(edge,t*edge,polygon)) return false;
-  }
-  return true;
-}
-// Choose one crop and one camera range for the whole preview. Neither changes
-// with live tilt, so reaching a photo boundary cannot trigger an automatic zoom.
-export function fixedDepthView(boundary: number[][], aspect: number, strength: number) {
-  if (!boundary.length) return { scale: 1, motionLimit: 1 };
-  const fits = (limit: number) => {
-    for (const x of [-1,-.5,0,.5,1]) for (const y of [-1,-.5,0,.5,1]) if (!depthViewportCovered(boundary,aspect,depthCamera({x,y},strength*limit))) return false;
-    return true;
-  };
-  if (fits(1)) return { scale: DEPTH_VIEW_SCALE, motionLimit: 1 };
-  let low = 0, high = 1;
-  for (let i = 0; i < 9; i++) { const mid = (low + high) / 2; if (fits(mid)) low = mid; else high = mid; }
-  return { scale: DEPTH_VIEW_SCALE, motionLimit: low * .995 };
-}
 // A depth map is inverse depth: bright pixels are closer. Reconstruct each ray
 // so that the neutral camera exactly reproduces the original photo.
 export function depthMesh(frame: DepthFrame) {

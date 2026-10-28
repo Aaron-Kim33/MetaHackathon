@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { extendInvisibleDepth, padTransparentColours } from '../server/spatial-layers.mjs';
-import { surfaceMesh, depthCamera, projectDepthPoint, surfaceBoundary, fixedDepthView, depthViewportCovered } from '../src/depth-mesh.ts';
+import { surfaceMesh, depthCamera, projectDepthPoint } from '../src/depth-mesh.ts';
 import { createApp } from '../server/index.mjs';
 
 test('invisible depth and RGB extension preserve alpha and every original visible pixel', () => {
@@ -28,21 +28,21 @@ test('rigid phone geometry stays a plane while subject relief remains continuous
   }
 });
 
-test('tilting up/down covers the viewport without repeating out-of-range edge pixels', () => {
+test('tilt keeps original zoom and full camera motion while real image UVs remain bounded', () => {
   const surface = { id:'backdrop',width:800,height:1000,gridWidth:4,gridHeight:4,depth:Array(16).fill(128),baseZ:-.6,relief:.18 };
-  const mesh=surfaceMesh(surface), boundary=surfaceBoundary(surface,mesh.vertices);
+  const mesh=surfaceMesh(surface);
   for(let i=0;i<mesh.vertices.length;i+=5) {
     assert.ok(mesh.vertices[i+3]>=0 && mesh.vertices[i+3]<=1);
     assert.ok(mesh.vertices[i+4]>=0 && mesh.vertices[i+4]<=1);
   }
-  const view=fixedDepthView(boundary,.8,1);
-  assert.equal(view.scale,1.08,'preview crop stays constant');
-  assert.ok(view.motionLimit>0 && view.motionLimit<=1);
-  for(let x=-1;x<=1.001;x+=.1) for(let y=-1;y<=1.001;y+=.1) {
-    const camera=depthCamera({x,y},view.motionLimit);
-    assert.ok(depthViewportCovered(boundary,.8,camera,view.scale),'actual image must cover the viewport throughout the permitted motion');
-  }
-  assert.equal(view.scale,1.08,'moving through every tilt must not alter the crop');
+  const zero=depthCamera({x:0,y:0},.7), up=depthCamera({x:0,y:1},.7), down=depthCamera({x:0,y:-1},.7);
+  assert.equal(up.pitch,-.10*.7); assert.equal(down.pitch,.10*.7);
+  assert.equal(up.shiftY,-.18*.7); assert.equal(down.shiftY,.18*.7);
+  const p=[0,-1,0];
+  assert.equal(projectDepthPoint(p,.8,zero).y,-1);
+  const views=[up,down].map(camera=>projectDepthPoint(p,.8,camera).y);
+  assert.ok(Math.max(...views)>-.98,'tilt must be able to bring the bottom edge back into view');
+  assert.ok(Math.min(...views)<-1,'bottom edge cannot be pinned by an adaptive crop');
 });
 
 test('layered preview preserves the neutral composite, phone rigidity, project data and Meta usage', async t => {
