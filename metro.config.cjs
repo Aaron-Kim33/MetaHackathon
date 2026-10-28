@@ -1,0 +1,10 @@
+const { getDefaultConfig } = require('expo/metro-config');
+const config = getDefaultConfig(__dirname);
+const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const separator = String.raw`[/\\]`;
+const root = __dirname.split(/[\\/]/).map(escape).join(separator);
+const excluded = ['.local', 'android', 'ios'].map(folder => new RegExp(`^${root}${separator}${escape(folder)}(?:${separator}|$)`));
+excluded.push(new RegExp(`${separator}subject-lift${separator}android${separator}(?:build|src${separator}main${separator}assets)${separator}`));
+const defaults = config.resolver.blockList;
+config.resolver.blockList = [...(Array.isArray(defaults) ? defaults : defaults ? [defaults] : []), ...excluded];
+module.exports = config;

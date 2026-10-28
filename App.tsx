@@ -406,7 +406,7 @@ function Editor() {
         </>}
         {activeTool === 'subject' && view && <>
           {layerPicker}
-          <Button title={busy === '기기에서 피사체를 분리하는 중' ? '자동 분리 중…' : '기기에서 자동 누끼'} disabled={disabled || !!pendingJob} onPress={() => autoCut()} /><Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? '사진을 꾹 누르면 누른 피사체를 자동으로 분리해요.' : '기기 자동 누끼는 설치형 개발 빌드에서 사용해요.')}</Text>
+          <Button title={busy === '기기에서 피사체를 분리하는 중' ? '자동 분리 중…' : '기기에서 자동 누끼'} disabled={disabled || !!pendingJob} onPress={() => autoCut(point)} /><Text accessibilityLiveRegion="polite" style={styles.help}>{deviceCutoutError || (deviceCutoutAvailable() ? (Platform.OS === 'android' ? '사진을 꾹 누르면 누른 피사체를 분리해요. 버튼은 선택한 점 또는 사진 가운데를 기준으로 분리해요.' : '사진을 꾹 누르면 누른 피사체를 자동으로 분리해요.') : '기기 자동 누끼는 설치형 개발 빌드에서 사용해요.')}</Text>
           <Button title="테두리로 자르기" disabled={disabled} onPress={() => openMask(true)} />
           <View style={styles.row}><View style={styles.grow}><Button title={picking ? '합성 보기' : '대상 선택'} secondary disabled={disabled} onPress={() => { setPicking(!picking); setPoint(null); }} /></View><View style={styles.grow}><Button title="지우개 보정" secondary disabled={disabled || (!view.subject && (!activeStickerId || activeStickerId === 'primary'))} onPress={() => openMask()} /></View></View>
           <View style={styles.row}><TextInput accessibilityLabel="분리할 대상 설명" style={[styles.input, styles.grow]} value={prompt} onChangeText={setPrompt} placeholder="예: person, sunglasses" editable={!disabled} /><Button title="AI로 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { point, prompt }, 'SAM이 피사체를 분리하는 중')} /></View>

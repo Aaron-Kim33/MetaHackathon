@@ -174,7 +174,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       }
       if (url.pathname === '/cutout/device') {
         insist(!jobs.active, 'AI 작업이 끝난 뒤 기기 자동 분리를 적용해 주세요.', 409);
-        insist(['apple-vision', 'android-mlkit'].includes(data.provider), '자동 누끼 제공자를 확인해 주세요.');
+        insist(['apple-vision', 'android-mlkit', 'android-mediapipe-cpu'].includes(data.provider), '자동 누끼 제공자를 확인해 주세요.');
         insist(typeof data.mask === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.mask) && data.mask.length <= 17000000, '올바른 누끼 마스크가 필요해요.');
         const asset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
         insist(!data.assetId || asset, '가져온 사진을 찾지 못했어요.');

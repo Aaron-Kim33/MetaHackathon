@@ -17,8 +17,8 @@ android { defaultConfig { externalNativeBuild { cmake { arguments "-DCMAKE_OBJEC
   let entry = app['meta-data'].find(item => item.$?.['android:name'] === name);
   if (!entry) { entry = { $: { 'android:name': name } }; app['meta-data'].push(entry); }
   const dependencies = new Set((entry.$['android:value'] || '').split(',').filter(Boolean));
-  // expo-dev-launcher's barcode UI and our subject model share this manifest key.
-  dependencies.add('barcode_ui'); dependencies.add('subject_segment');
+  // Preserve the development launcher QR model; subject inference is bundled and CPU-only.
+  dependencies.add('barcode_ui'); dependencies.delete('subject_segment');
   entry.$['android:value'] = [...dependencies].join(',');
   entry.$['tools:replace'] = 'android:value';
   return value;

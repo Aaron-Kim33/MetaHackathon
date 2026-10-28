@@ -2,7 +2,7 @@
   "expo": {
     "name": "Reel Talk · Pop Out",
     "slug": "reel-talk-popout",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "ios": {
@@ -16,7 +16,8 @@
     },
     "android": {
       "usesCleartextTraffic": true,
-      "package": "app.reeltalk.popout"
+      "package": "app.reeltalk.popout",
+      "versionCode": 2
     },
     "plugins": [
       [

@@ -10,3 +10,6 @@ dist/
 /android/
 /ios/
 modules/**/android/build/
+
+modules/subject-lift/android/src/main/assets/*.task
+modules/subject-lift/android/src/main/assets/*.task.tmp

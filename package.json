@@ -15,7 +15,8 @@
     "fixture": "node scripts/fixture.mjs",
     "dev": "node scripts/dev.mjs",
     "build:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
-    "share:android": "node scripts/share-android.mjs"
+    "share:android": "node scripts/share-android.mjs",
+    "setup:cutout": "node scripts/setup-cutout-model.mjs"
   },
   "dependencies": {
     "@meta-sam/parser": "0.1.0",

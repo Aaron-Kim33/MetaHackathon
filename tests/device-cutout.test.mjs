@@ -37,8 +37,9 @@ test('device masks apply to main and additional photos without changing theme, e
   const extra = await post('/cutout/device', { ...args, assetId: imported.pendingPhoto.id, provider: 'apple-vision' });
   assert.equal(extra.stickers.length, 1); assert.equal(extra.subject, first.subject); assert.equal(extra.pendingPhoto, null); assert.equal(extra.options.mode, 'plain');
   const imported2 = await post('/imports', { projectId, image: (await image('#00ff00')).toString('base64') });
-  const extra2 = await post('/cutout/device', { ...args, assetId: imported2.pendingPhoto.id });
+  const extra2 = await post('/cutout/device', { ...args, assetId: imported2.pendingPhoto.id, provider: 'android-mediapipe-cpu' });
   assert.equal(extra2.stickers.length, 2); assert.deepEqual(extra2.stickers[0], extra.stickers[0]); assert.equal(extra2.subject, first.subject);
+  assert.equal(extra2.project.stickers[1].provider, 'android-mediapipe-cpu');
   const persisted = await app.store.get(projectId); assert.equal(persisted.stickers[0].provider, 'apple-vision');
   await post('/editor-state', { projectId, pendingJob: '11111111-1111-4111-8111-111111111111' });
   const session = await fetch(`http://127.0.0.1:${app.server.address().port}/editor-state`, { headers: { Authorization: 'Bearer device' } }).then(r => r.json());

@@ -6,6 +6,8 @@ if (-not $env:JAVA_HOME) {
   $java = Get-Command java -ErrorAction Stop
   $env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $java.Source)
 }
+node scripts/setup-cutout-model.mjs
+if ($LASTEXITCODE -ne 0) { throw 'CPU 누끼 모델 준비 실패' }
 node node_modules/expo/bin/cli prebuild --platform android --no-install
 if ($LASTEXITCODE -ne 0) { throw 'Android 프로젝트 생성 실패' }
 Push-Location android

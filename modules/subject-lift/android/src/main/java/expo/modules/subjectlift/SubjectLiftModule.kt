@@ -2,80 +2,97 @@ package expo.modules.subjectlift
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Base64
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
-import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
+import android.util.Log
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.ByteBufferExtractor
+import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.tasks.components.containers.NormalizedKeypoint
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.vision.interactivesegmenter.InteractiveSegmenter
+import com.google.mediapipe.tasks.vision.interactivesegmenter.InteractiveSegmenterOptions
+import com.google.mediapipe.tasks.vision.interactivesegmenter.Stroke
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
-import expo.modules.kotlin.Promise
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.Executor
+import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
 class SubjectLiftModule : Module() {
+  private val busy = AtomicBoolean(false)
   override fun definition() = ModuleDefinition {
     Name("SubjectLift")
     Function("isSupported") { true }
-    AsyncFunction("segment") { uri: String, x: Double?, y: Double?, promise: Promise ->
-      // The JS bridge writes the server-normalized, upright PNG to the app cache.
-      val file = File(Uri.parse(uri).path ?: "")
-      val cache = appContext.reactContext?.cacheDir
-      if (cache == null || !file.canonicalPath.startsWith(cache.canonicalPath + File.separator)) {
-        promise.reject("INVALID_IMAGE", "사진 캐시를 읽지 못했어요.", null)
-        return@AsyncFunction
-      }
-      val bitmap = BitmapFactory.decodeFile(file.path)
-      if (bitmap == null) {
-        promise.reject("INVALID_IMAGE", "사진을 읽지 못했어요.", null)
-        return@AsyncFunction
-      }
-      val subjectOptions = SubjectSegmenterOptions.SubjectResultOptions.Builder().enableConfidenceMask().build()
-      val options = SubjectSegmenterOptions.Builder().enableForegroundConfidenceMask().enableMultipleSubjects(subjectOptions).build()
-      val segmenter = SubjectSegmentation.getClient(options)
-      segmenter.process(InputImage.fromBitmap(bitmap, 0)).addOnSuccessListener(Executor { job -> Thread(job, "SubjectLiftResult").start() }) { result ->
-        try {
-          val width = bitmap.width
-          val height = bitmap.height
-          val pixels = IntArray(width * height) { android.graphics.Color.BLACK }
-          if (x != null && y != null) {
-            val px = (x * width).toInt().coerceIn(0, width - 1)
-            val py = (y * height).toInt().coerceIn(0, height - 1)
-            val selected = result.subjects.filter { subject ->
-              px >= subject.startX && px < subject.startX + subject.width && py >= subject.startY && py < subject.startY + subject.height
-            }.maxByOrNull { subject -> subject.confidenceMask!!.get((py - subject.startY) * subject.width + px - subject.startX) }
-            if (selected == null || selected.confidenceMask!!.get((py - selected.startY) * selected.width + px - selected.startX) < 0.25f) {
-              throw IllegalStateException("누른 곳에서 피사체를 찾지 못했어요. 피사체 안쪽을 눌러 주세요.")
-            }
-            val mask = selected.confidenceMask!!
-            for (sy in 0 until selected.height) for (sx in 0 until selected.width) {
-              val dx = selected.startX + sx
-              val dy = selected.startY + sy
-              if (dx in 0 until width && dy in 0 until height) {
-                val gray = (mask.get(sy * selected.width + sx).coerceIn(0f, 1f) * 255).toInt()
-                pixels[dy * width + dx] = android.graphics.Color.rgb(gray, gray, gray)
-              }
-            }
-          } else {
-            val mask = result.foregroundConfidenceMask ?: throw IllegalStateException("분리 모델을 준비하지 못했어요.")
-            if (mask.capacity() != pixels.size) throw IllegalStateException("분리 결과 크기가 사진과 달라요.")
-            for (i in pixels.indices) {
-              val gray = (mask.get(i).coerceIn(0f, 1f) * 255).toInt()
-              pixels[i] = android.graphics.Color.rgb(gray, gray, gray)
-            }
-          }
-          val output = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
-          val bytes = ByteArrayOutputStream()
-          output.compress(Bitmap.CompressFormat.PNG, 100, bytes)
-          output.recycle()
-          promise.resolve(mapOf("mask" to Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP), "width" to width, "height" to height, "provider" to "android-mlkit"))
-        } catch (error: Exception) {
-          promise.reject("NO_SUBJECT", error.message ?: "피사체를 찾지 못했어요.", error)
-        } finally { segmenter.close(); bitmap.recycle() }
-      }.addOnFailureListener { error ->
-        segmenter.close(); bitmap.recycle()
-        promise.reject("MODEL_NOT_READY", "자동 분리 모델이 아직 준비되지 않았어요. 인터넷 연결 후 잠시 뒤 다시 시도해 주세요. (${error.message})", error)
+    Function("engine") { "mediapipe-cpu-v1" }
+    AsyncFunction("segment") { uri: String, x: Double?, y: Double? ->
+      check(busy.compareAndSet(false, true)) { "앞선 자동 누끼가 끝날 때까지 기다려 주세요." }
+      var original: Bitmap? = null
+      var input: Bitmap? = null
+      var smallMask: Bitmap? = null
+      var fullMask: Bitmap? = null
+      var image: MPImage? = null
+      var output: MPImage? = null
+      var segmenter: InteractiveSegmenter? = null
+      val started = SystemClock.elapsedRealtime()
+      try {
+        val context = appContext.reactContext ?: error("앱이 준비되지 않았어요.")
+        val file = File(Uri.parse(uri).path ?: "")
+        require(file.canonicalPath.startsWith(context.cacheDir.canonicalPath + File.separator)) { "사진 캐시를 읽지 못했어요." }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        require(bounds.outWidth in 1..1600 && bounds.outHeight in 1..1600) { "사진 크기가 올바르지 않아요. 사진을 다시 열어 주세요." }
+        original = BitmapFactory.decodeFile(file.path) ?: error("사진을 읽지 못했어요.")
+        val factor = minOf(1.0, 768.0 / maxOf(original.width, original.height))
+        input = Bitmap.createScaledBitmap(original, maxOf(1, (original.width * factor).roundToInt()), maxOf(1, (original.height * factor).roundToInt()), true)
+        image = BitmapImageBuilder(input).build()
+        val options = InteractiveSegmenterOptions.builder().setBaseOptions(
+          BaseOptions.builder().setModelAssetPath("interactive_segmentation.task").setDelegate(Delegate.CPU).build()
+        ).build()
+        Log.i("SubjectLiftCpu", "CPU segmentation start ${input.width}x${input.height}")
+        segmenter = InteractiveSegmenter.createFromOptions(context, options)
+        segmenter.setImage(image)
+        val px = (x ?: 0.5).coerceIn(0.001, 0.999).toFloat()
+        val py = (y ?: 0.5).coerceIn(0.001, 0.999).toFloat()
+        val stroke = Stroke.builder().setBrushMode(Stroke.BrushMode.POSITIVE)
+          .setPoints(listOf(NormalizedKeypoint.create(px, py))).setCompleted(true).build()
+        output = segmenter.segment(listOf(stroke))
+        val buffer = ByteBufferExtractor.extract(output).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val width = output.width
+        val height = output.height
+        require(buffer.remaining() >= width * height) { "분리 결과가 올바르지 않아요." }
+        val pixels = IntArray(width * height)
+        var foreground = 0
+        for (i in pixels.indices) {
+          val confidence = buffer.get(i)
+          val gray = if (confidence.isFinite()) (confidence.coerceIn(0f, 1f) * 255).roundToInt() else 0
+          if (gray > 127) foreground++
+          pixels[i] = Color.rgb(gray, gray, gray)
+        }
+        check(foreground > 8) { "피사체를 찾지 못했어요. 피사체 안쪽을 길게 눌러 주세요." }
+        smallMask = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+        fullMask = Bitmap.createScaledBitmap(smallMask, bounds.outWidth, bounds.outHeight, true)
+        val bytes = ByteArrayOutputStream()
+        check(fullMask.compress(Bitmap.CompressFormat.PNG, 100, bytes)) { "누끼 마스크 저장에 실패했어요." }
+        Log.i("SubjectLiftCpu", "CPU segmentation complete ${SystemClock.elapsedRealtime() - started}ms foreground=$foreground")
+        mapOf("mask" to Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP), "width" to bounds.outWidth, "height" to bounds.outHeight, "provider" to "android-mediapipe-cpu")
+      } catch (error: Throwable) {
+        Log.e("SubjectLiftCpu", "CPU segmentation failed", error)
+        throw error
+      } finally {
+        runCatching { output?.close() }
+        runCatching { segmenter?.close() }
+        runCatching { image?.close() }
+        if (fullMask !== smallMask) fullMask?.recycle()
+        smallMask?.recycle()
+        if (input !== original) input?.recycle()
+        original?.recycle()
+        busy.set(false)
       }
     }
   }
