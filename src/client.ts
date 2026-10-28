@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
 
 export type EditOptions = {
+  frameScale: number; frameX: number; frameY: number;
+  backgroundZoom: number; backgroundX: number; backgroundY: number; backgroundDim: number;
   layerOrder: string[];
   hidePrimary: boolean;
   tilt: number; depth: number;
@@ -22,6 +24,7 @@ export type ProjectView = {
   primaryImage?: string | null;
   subjectShadow?: string | null;
   sceneVersion?: number;
+  backgroundPhoto?: { data: string; width: number; height: number } | null;
   subjectBounds?: { x: number; y: number; width: number; height: number } | null;
   subjectHitMask?: import('./hit-testing').HitMask | null;
   stickers?: { id: string; data: string; width: number; height: number; label: string; hitMask?: import('./hit-testing').HitMask }[];

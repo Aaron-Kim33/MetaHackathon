@@ -1,5 +1,6 @@
 import type { EditOptions, ProjectView } from './client';
 import { orderedLayers } from './layer-order.ts';
+import { legacyDefaultFrame, PHOTO_FRAME_PRESET } from './frame-preset.ts';
 const stable = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 export function sameOptions(a: EditOptions, b: EditOptions) { return stable({ ...a, layerOrder: orderedLayers(a) }) === stable({ ...b, layerOrder: orderedLayers(b) }); }
 export function sameBase(a: EditOptions, b: EditOptions) {
@@ -13,7 +14,7 @@ export function rebaseOptions(saved: EditOptions, view: ProjectView): EditOption
   const ids = (view.stickers || []).map(item => item.id);
   const existing = (saved.stickerTransforms || []).filter(item => ids.includes(item.id));
   const stickerTransforms = [...existing, ...(view.options.stickerTransforms || []).filter(item => ids.includes(item.id) && !existing.some(old => old.id === item.id))];
-  const next = { ...view.options, ...saved, stickerTransforms };
+  const next = { ...view.options, ...saved, ...(legacyDefaultFrame(saved) ? PHOTO_FRAME_PRESET : {}), stickerTransforms };
   return { ...next, layerOrder: orderedLayers(next) };
 }
 export function moveLayer(options: EditOptions, id: string, direction: 'front' | 'back', visibleIds?: string[]): EditOptions {

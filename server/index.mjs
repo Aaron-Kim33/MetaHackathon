@@ -55,12 +55,13 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const stickers = await Promise.all((p.stickers || []).map(async sticker => ({ ...sticker, bytes: await store.read(id, sticker.maskFile || sticker.file) })));
     const pending = (p.imports || []).find(item => item.id === p.pendingImport);
     const pendingPhoto = pending ? { id: pending.id, width: pending.width, height: pending.height, source: encoded(await store.read(id, pending.file)) } : null;
+    const backgroundPhoto = p.backgroundPhoto ? { ...p.backgroundPhoto, bytes: await store.read(id, p.backgroundPhoto.file) } : null;
     const shadow = cutout ? await subjectShadow(cutout) : null;
-    const result = await compose({ source: photoSource, cutout, decoration, stickers, shadow, options: p.options || undefined });
+    const result = await compose({ source: photoSource, cutout, decoration, stickers, shadow, backgroundPhoto, options: p.options || undefined });
     const preview = { sceneVersion: COMPOSITION_VERSION, image: encoded(result.bytes), baseImage: encoded(result.baseBytes), primaryImage: encoded(result.primaryBytes), width: result.width, height: result.height, options: result.options, baseOptions: result.options, imageOptions: result.options };
     if (previewOnly) return preview;
     const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
-    return { ...preview, subjectShadow: shadow ? encoded(shadow) : null, subjectHitMask: cutout ? await makeHitMask(cutout) : null, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: await Promise.all(stickers.map(async ({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label, hitMask: await makeHitMask(bytes) }))), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
+    return { ...preview, backgroundPhoto: backgroundPhoto ? { data: encoded(backgroundPhoto.bytes), width: backgroundPhoto.width, height: backgroundPhoto.height } : null, subjectShadow: shadow ? encoded(shadow) : null, subjectHitMask: cutout ? await makeHitMask(cutout) : null, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: await Promise.all(stickers.map(async ({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label, hitMask: await makeHitMask(bytes) }))), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
@@ -102,7 +103,24 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           insist(!jobs.active, 'AI 작업이 끝난 뒤 메인 사진을 변경해 주세요.', 409);
           const latest = await store.get(project.id), options = settings(latest.options || undefined);
           Object.assign(latest, { sourceFile, width: photo.width, height: photo.height, selectedId: null, candidates: [], maskEdits: {}, maskRevision: (latest.maskRevision || 0) + 1, provenance: 'user' });
-          latest.options = settings({ ...options, hidePrimary: false, zoom: options.mode === 'frame' ? 1.55 : 1, x: 0, y: options.mode === 'frame' ? -0.15 : 0 });
+          latest.options = settings({ ...options, hidePrimary: false, zoom: options.mode === 'frame' ? 1.2 : 1, x: options.mode === 'frame' ? 0.18 : 0, y: options.mode === 'frame' ? -0.17 : 0 });
+          await store.save(latest);
+        });
+        send(200, await view(project.id)); return;
+      }
+      if (url.pathname === '/background' || url.pathname === '/background/remove') {
+        let backgroundPhoto = null;
+        if (url.pathname === '/background') {
+          insist(typeof data.image === 'string' && /^[A-Za-z0-9+/=]+$/.test(data.image) && data.image.length <= 17000000, '올바른 배경 사진을 선택해 주세요.');
+          const photo = await normalisePhoto(Buffer.from(data.image, 'base64'));
+          const file = `background-${randomUUID()}.png`;
+          await store.write(project.id, file, photo.bytes);
+          backgroundPhoto = { file, width: photo.width, height: photo.height };
+        }
+        await mutate(async () => {
+          const latest = await store.get(project.id);
+          latest.backgroundPhoto = backgroundPhoto;
+          latest.options = settings({ ...(latest.options || {}), backgroundZoom: 1, backgroundX: 0.5, backgroundY: 0.5 });
           await store.save(latest);
         });
         send(200, await view(project.id)); return;

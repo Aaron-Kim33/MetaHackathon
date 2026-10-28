@@ -7,6 +7,7 @@ import * as FS from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { Connection, EditOptions, ProjectView, Usage, initialConnection, jobId, request } from './src/client';
+import { PHOTO_FRAME_PRESET } from './src/frame-preset';
 import { COMPOSITION_VERSION } from './src/composition-scene';
 import { Snapshot, exportPhoto, persist, restore } from './src/persistence';
 import { photoDestination, saveToPhotos } from './src/photos';
@@ -149,6 +150,24 @@ function Editor() {
       setMessage(next.options.mode === 'frame' ? '메인 사진을 바꿨어요. 새 사진의 피사체를 분리하면 팝아웃에 적용돼요. 기존 스티커는 유지했어요.' : '메인 사진을 바꿨어요. 기존 스티커와 배치는 유지했어요.');
     });
   };
+  const chooseBackgroundPhoto = () => {
+    if (!view) return;
+    void task('배경 사진을 불러오는 중', async () => {
+      const image = await pickPhotoData();
+      if (!image) { setMessage('배경 선택을 취소했어요.'); return; }
+      await savePendingOptions();
+      accept(await request<ProjectView>(connection, '/background', { projectId: view.project.id, image }));
+      setHistory([]); setMessage('배경 사진을 바꿨어요. 메인 사진과 스티커는 유지돼요.');
+    });
+  };
+  const removeBackgroundPhoto = () => {
+    if (!view) return;
+    void task('배경 사진을 지우는 중', async () => {
+      await savePendingOptions();
+      accept(await request<ProjectView>(connection, '/background/remove', { projectId: view.project.id }));
+      setHistory([]); setMessage('배경 사진을 지웠어요. 선택한 배경색을 사용해요.');
+    });
+  };
   const modelsAllowed = !!status?.modelConfigured && !!status?.creditsConfirmed;
   const modelTask = (endpoint: string, extra: object, label: string) => {
     if (!view) return;
@@ -203,7 +222,7 @@ function Editor() {
   const change = <K extends keyof EditOptions>(name: K, value: EditOptions[K]) => { if (draft) render({ ...draft, [name]: value }); };
   const selectTheme = (mode: EditOptions['mode']) => {
     if (!draft || draft.mode === mode) return;
-    const next = { ...draft, mode, zoom: mode === 'frame' ? 1.55 : 1, x: 0, y: mode === 'frame' ? -0.15 : 0 };
+    const next = { ...draft, mode, ...(mode === 'frame' ? PHOTO_FRAME_PRESET : { zoom: 1, x: 0, y: 0 }) };
     setDraft(next); render(next);
   };
   const dirty = !!view && !!draft && JSON.stringify(view.options) !== JSON.stringify(draft);
@@ -321,6 +340,7 @@ function Editor() {
           {stage.height > 180 && <><Text style={styles.emptyTitle}>사진 한 장,{ '\n' }내 스타일로.</Text>{stage.height > 280 && <Text style={styles.emptyHint}>AI 피사체 분리 · 장식 · 테마 편집</Text>}<Button title="사진 선택" disabled={disabled} onPress={choosePhoto} /><Pressable accessibilityRole="button" onPress={useFixture} disabled={disabled} style={styles.sampleLink}><Text style={styles.sampleText}>연습용 그림으로 시작</Text></Pressable></>}
         </View>}
       </View>
+      {view && !maskOpen && !interacting && <Pressable accessibilityRole="button" accessibilityLabel="배경 사진 설정" disabled={disabled} onPress={() => { setActiveTool('background'); setThemeTab('background'); }} style={{ position: 'absolute', left: 12, top: draft?.mode === 'frame' ? 114 : 72, zIndex: 70, backgroundColor: '#302D38DD', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 }}><Text style={{ color: '#fff', fontSize: 11 }}>배경 사진</Text></Pressable>}
       {view && draft?.mode === 'frame' && !maskOpen && !interacting && <Pressable accessibilityRole="button" accessibilityLabel="폰 팝아웃 메인 사진 변경" disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} style={{ position: 'absolute', left: 12, top: 72, zIndex: 70, backgroundColor: '#302D38DD', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, opacity: disabled || pendingJob ? 0.35 : 1 }}><Text style={{ color: '#fff', fontSize: 11 }}>메인 사진 변경</Text></Pressable>}
       {trashState.visible && !maskOpen && <DragTrash over={trashState.over} right={canvasSize.railWidth + 10} onBounds={setTrashBounds} />}
       {screen.showRail && !maskOpen && <View style={styles.railPosition}><ToolRail active={maskOpen ? 'subject' : activeTool} onSelect={selectTool} disabled={controlsDisabled} hasPhoto={!!view} buttonHeight={screen.railButtonHeight} pendingJob={!!pendingJob} /></View>}
@@ -333,7 +353,7 @@ function Editor() {
 
     {!!activeTool && !maskOpen && <View pointerEvents={interacting ? "none" : "auto"} style={[styles.sheet, interacting && { opacity: 0 }, { height: screen.panelHeight, bottom: keyboardOpen ? 8 : 64 }]}>
       <View style={styles.sheetHeader}><Text style={styles.sheetTitle}>{activeTool === 'background' ? '테마·배경' : EDITOR_TOOLS.find(tool => tool.id === activeTool)?.label}</Text><Pressable accessibilityRole="button" accessibilityLabel="도구 접기" onPress={closeTools} style={styles.closeButton}><Text style={styles.closeText}>⌄</Text></Pressable></View>
-      {activeTool === 'background' && <Tabs items={[{ id: 'theme', label: '테마' }, { id: 'background', label: '배경색' }]} value={themeTab} onChange={setThemeTab} />}
+      {activeTool === 'background' && <Tabs items={[{ id: 'theme', label: '테마' }, { id: 'background', label: '배경' }]} value={themeTab} onChange={setThemeTab} />}
       {activeTool === 'position' && <Tabs items={[{ id: 'move', label: '위치·크기' }, { id: 'shadow', label: '그림자' }, { id: 'ratio', label: '비율' }]} value={positionTab} onChange={setPositionTab} />}
       {activeTool === 'decoration' && <Tabs items={[{ id: 'create', label: '만들기' }, { id: 'place', label: '배치' }]} value={decorationTab} onChange={setDecorationTab} />}
       {activeTool === 'more' && <Tabs items={[{ id: 'settings', label: '연결 설정' }, { id: 'jobs', label: pendingJob ? 'AI 작업 !' : '작업 안내' }]} value={moreTab} onChange={setMoreTab} />}
@@ -341,7 +361,7 @@ function Editor() {
         {activeTool === 'photo' && <>
           <View style={styles.row}><View style={styles.grow}><Button title={view ? "사진 추가" : "사진 선택"} onPress={choosePhoto} disabled={disabled} /></View>{!view && <View style={styles.grow}><Button title="연습용 그림" onPress={useFixture} secondary disabled={disabled} /></View>}</View>
           <Text style={styles.help}>사진을 추가하면 기존 캔버스에 새 스티커로 쌓여요. 마지막 편집만 자동 보관해요.</Text>
-          {view && <Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} />}
+          {view && <><Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} /><Button title="배경 사진 선택" secondary disabled={disabled} onPress={chooseBackgroundPhoto} /></>}
           {view?.pendingPhoto && <><Button title="가져온 사진 자르기 계속" secondary disabled={disabled} onPress={() => openImported()} /><Button title="추가 사진 AI로 스티커 만들기" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/segment', { assetId: view.pendingPhoto!.id, prompt, point: null }, '추가 사진에서 피사체를 분리하는 중')} /></>}
         </>}
         {activeTool === 'subject' && view && <>
@@ -357,17 +377,19 @@ function Editor() {
           {layerPicker}
           {positionTab === 'move' && activeTransform && <><Stepper title="선택 스티커 크기" value={activeTransform.scale} step={0.05} min={0.08} max={2.5} disabled={disabled} onChange={value => changeSticker('scale', value)} /><Stepper title="선택 스티커 좌우" value={activeTransform.x} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('x', value)} /><Stepper title="선택 스티커 상하" value={activeTransform.y} step={0.03} min={-0.3} max={1.3} disabled={disabled} onChange={value => changeSticker('y', value)} /></>}
           {positionTab === 'move' && activeStickerId === 'primary' && <><Stepper title="사진 확대" value={draft.zoom} step={0.05} min={0.8} max={2.4} disabled={disabled} onChange={value => change('zoom', value)} /><Stepper title="좌우 위치" value={draft.x} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('x', value)} /><Stepper title="상하 위치" value={draft.y} step={0.05} min={-0.8} max={0.8} disabled={disabled} onChange={value => change('y', value)} /><Text style={styles.help}>사진 위에서 드래그·핀치로 바로 조절할 수도 있어요.</Text></>}
-          {positionTab === 'shadow' && <><Stepper title="그림자 진하기" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} />{draft.mode === 'frame' && <><Stepper title="폰 기울기" unit="degrees" value={draft.tilt || 0} step={2} min={-18} max={18} disabled={disabled} onChange={value => change('tilt', value)} /><Stepper title="프레임 깊이" value={draft.depth ?? 0.75} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('depth', value)} /></>}<Text style={styles.help}>기울기·두께와 피사체 그림자는 폰 팝아웃에 적용돼요.</Text></>}
+          {positionTab === 'shadow' && <><Stepper title="그림자 진하기" value={draft.shadow} step={0.1} min={0} max={0.8} disabled={disabled} onChange={value => change('shadow', value)} />{draft.mode === 'frame' && <><Stepper title="폰 기울기" unit="degrees" value={draft.tilt || 0} step={2} min={-18} max={18} disabled={disabled} onChange={value => change('tilt', value)} /><Stepper title="폰 크기" value={draft.frameScale ?? 1} step={0.05} min={0.7} max={1.5} disabled={disabled} onChange={value => change('frameScale', value)} /><Stepper title="폰 좌우" value={draft.frameX ?? 0} step={0.03} min={-0.35} max={0.35} disabled={disabled} onChange={value => change('frameX', value)} /><Stepper title="폰 상하" value={draft.frameY ?? 0} step={0.03} min={-0.25} max={0.25} disabled={disabled} onChange={value => change('frameY', value)} /><Stepper title="프레임 깊이" value={draft.depth ?? 0.75} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('depth', value)} /></>}<Text style={styles.help}>기울기·두께와 피사체 그림자는 폰 팝아웃에 적용돼요.</Text></>}
           {positionTab === 'ratio' && <><View style={styles.row}>{(['portrait', 'story', 'square'] as const).map((ratio, i) => <View style={styles.grow} key={ratio}><Button title={['4:5', '9:16', '1:1'][i]} secondary selected={draft.ratio === ratio} disabled={disabled} onPress={() => change('ratio', ratio)} /></View>)}</View><Text style={styles.help}>비율을 바꾼 뒤 사진 위치와 잘리는 부분을 확인하세요.</Text></>}
         </>}
         {activeTool === 'background' && draft && themeTab === 'theme' && <>
           <View style={styles.row}>{(['plain', 'frame', 'sticker'] as const).map(mode => <View style={styles.grow} key={mode}><Button title={themeName(mode)} secondary selected={(draft.mode || 'frame') === mode} disabled={disabled || (mode === 'sticker' && !view?.subject)} onPress={() => selectTheme(mode)} /></View>)}</View>
-          {draft.mode === 'frame' && <Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} />}
+          {draft.mode === 'frame' && <><Button title="메인 사진 변경" secondary disabled={disabled || !!pendingJob} onPress={replaceMainPhoto} /><Button title="추천 구도" secondary disabled={disabled} onPress={() => render({ ...draft, ...PHOTO_FRAME_PRESET })} /></>}
           <Text style={styles.help}>{draft.mode === 'frame' ? '피사체가 폰 프레임 밖으로 튀어나오는 테마예요. 위치·크기와 그림자로 입체감을 조절하세요.' : draft.mode === 'sticker' ? '분리한 피사체만 투명 PNG로 내보내요. 체크무늬는 저장되지 않아요.' : '기본 캔버스에서 사진 또는 분리한 피사체를 편집해요. AI 장식도 함께 배치할 수 있어요.'}</Text>
           {!view?.subject && <Text style={styles.help}>피사체에서 AI로 분리하거나 테두리로 자르면 팝아웃·스티커에 사용할 수 있어요.</Text>}
         </>}
         {activeTool === 'background' && draft && themeTab === 'background' && <>
-          <Text style={styles.help}>콘텐츠 바깥 배경색</Text><View style={styles.wrap}>{['#EEE8DF', '#DDE9E4', '#DFDDF1', '#F0DCD4', '#253043', '#FFFFFF', '#17151D'].map(color => <Pressable key={color} accessibilityRole="button" accessibilityLabel={`배경 ${color}`} accessibilityState={{ selected: draft.background === color }} onPress={() => change('background', color)} disabled={disabled} style={[styles.swatch, { backgroundColor: color, borderColor: draft.background === color ? '#9C84F0' : '#D8D2DE' }]} />)}</View>
+          <Button title={view?.backgroundPhoto ? '배경 사진 변경' : '내 사진에서 배경 선택'} disabled={disabled} onPress={chooseBackgroundPhoto} />
+          {view?.backgroundPhoto && <><Button title="배경 사진 지우기" secondary disabled={disabled} onPress={removeBackgroundPhoto} /><Stepper title="배경 확대" value={draft.backgroundZoom ?? 1} step={0.1} min={1} max={3} disabled={disabled} onChange={value => change('backgroundZoom', value)} /><Stepper title="배경 좌우" value={draft.backgroundX ?? 0.5} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('backgroundX', value)} /><Stepper title="배경 상하" value={draft.backgroundY ?? 0.5} step={0.1} min={0} max={1} disabled={disabled} onChange={value => change('backgroundY', value)} /><Stepper title="배경 어둡기" value={draft.backgroundDim ?? 0.04} step={0.05} min={0} max={0.5} disabled={disabled} onChange={value => change('backgroundDim', value)} /></>}
+          <Text style={styles.help}>{draft.mode === 'sticker' ? '투명 스티커 테마에서는 배경을 숨겨요. 다른 테마로 바꾸면 다시 보여요.' : '배경 사진은 메인 사진·스티커와 따로 저장돼요. 사진을 지우면 아래 색을 사용해요.'}</Text><Text style={styles.help}>배경색</Text><View style={styles.wrap}>{['#EEE8DF', '#DDE9E4', '#DFDDF1', '#F0DCD4', '#253043', '#FFFFFF', '#17151D'].map(color => <Pressable key={color} accessibilityRole="button" accessibilityLabel={`배경 ${color}`} accessibilityState={{ selected: draft.background === color }} onPress={() => change('background', color)} disabled={disabled} style={[styles.swatch, { backgroundColor: color, borderColor: draft.background === color ? '#9C84F0' : '#D8D2DE' }]} />)}</View>
         </>}
         {activeTool === 'decoration' && view && <>
           {decorationTab === 'create' && <><TextInput accessibilityLabel="생성할 장식 설명" style={styles.input} value={decorationPrompt} onChangeText={setDecorationPrompt} editable={!disabled} placeholder="예: a purple crystal" maxLength={500} /><Button title="AI 장식 만들기" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration', { prompt: decorationPrompt }, 'Muse Image가 장식을 만드는 중')} />{view.project.decorationPending && <Button title="생성한 장식 배경 분리" disabled={disabled || !modelsAllowed || !!pendingJob} onPress={() => modelTask('/decoration/segment', {}, '장식 배경을 분리하는 중')} />}<Text style={styles.help}>생성 1회와 배경 분리 1회를 사용해요. 배치 조절은 추가 AI 호출이 없어요.</Text></>}

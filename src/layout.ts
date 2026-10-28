@@ -1,8 +1,13 @@
 import { frameMatrix, unprojectFrame } from './frame.ts';
-export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; tilt?: number; depth?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
+export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; frameScale?: number; frameX?: number; frameY?: number; tilt?: number; depth?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
 export type Dimensions = { width: number; height: number };
 export type StickerTransform = { id: string; x: number; y: number; scale: number };
 export type NormalizedBounds = { x: number; y: number; width: number; height: number };
+export function backgroundPhotoRect(source: Dimensions, canvas: Dimensions, options: { backgroundZoom?: number; backgroundX?: number; backgroundY?: number }) {
+  const factor = Math.max(canvas.width / source.width, canvas.height / source.height) * (options.backgroundZoom || 1);
+  const width = Math.round(source.width * factor), height = Math.round(source.height * factor);
+  return { x: Math.round((canvas.width - width) * (options.backgroundX ?? 0.5)), y: Math.round((canvas.height - height) * (options.backgroundY ?? 0.5)), width, height };
+}
 const visibleShift = (start: number, length: number, total: number, minimum: number) => {
   const keep = Math.min(minimum, length, total);
   return start + length < keep ? keep - start - length : start > total - keep ? total - keep - start : 0;
@@ -38,8 +43,9 @@ export function gestureSticker(initial: StickerTransform, source: Dimensions, ca
 }
 export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   const width = 1080, height = options.ratio === 'story' ? 1920 : options.ratio === 'square' ? 1080 : 1350;
-  const screenHeight = Math.round(height * 0.59), screenWidth = Math.min(588, Math.round(screenHeight * 0.56));
-  const screen = options.mode === 'sticker' || options.mode === 'plain' ? { x: 0, y: 0, width, height } : { x: Math.round((width - screenWidth) / 2), y: Math.round(height * 0.29), width: screenWidth, height: screenHeight };
+  const baseHeight = Math.round(height * 0.59), baseWidth = Math.min(588, Math.round(baseHeight * 0.56));
+  const screenHeight = Math.round(baseHeight * (options.frameScale || 1)), screenWidth = Math.round(baseWidth * (options.frameScale || 1));
+  const screen = options.mode === 'sticker' || options.mode === 'plain' ? { x: 0, y: 0, width, height } : { x: Math.round((width - screenWidth) / 2 + (options.frameX || 0) * width), y: Math.round(height * 0.29 + baseHeight / 2 - screenHeight / 2 + (options.frameY || 0) * height), width: screenWidth, height: screenHeight };
   const scale = (options.mode === 'sticker' || options.mode === 'plain' ? Math.min(width / source.width, height / source.height) * 0.85 : Math.max(screen.width / source.width, screen.height / source.height)) * options.zoom;
   const photo = { width: Math.round(source.width * scale), height: Math.round(source.height * scale), x: 0, y: 0 };
   photo.x = Math.round(screen.x + (screen.width - photo.width) / 2 + options.x * screen.width);
