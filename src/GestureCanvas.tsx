@@ -1,7 +1,9 @@
+import { LocalizedText as Text } from './i18n-react';
+import { t } from './i18n';
 import type { DepthFrame } from './depth-mesh';
-import { rotatePoint, rotatedRect, wrapAngle } from './rotation';
+import { rotatePoint, wrapAngle } from './rotation';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {  PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import type { GestureResponderEvent } from 'react-native';
 import type { EditOptions, ProjectView } from './client';
 import { CachedImage } from './CachedImage';
@@ -11,31 +13,25 @@ import { canAutoLiftPhoto, HoldCutout } from './hold-cutout';
 import { unprojectFrame } from './frame';
 import { meaningfulGesture } from './edit-performance';
 import { orderedLayers } from './layer-order';
-import { MeasuredCanvasTouch } from './canvas-touch';
+import { canvasTouchFromEvent, MeasuredCanvasTouch } from './canvas-touch';
 import type { CanvasTouch, LocalCanvasTouch } from './canvas-touch';
-import { hitLayer } from './hit-testing';
+import { hitLayer, hitPhone, hitMaskBounds } from './hit-testing';
 import { DragDelete } from './drag-delete';
 import type { TrashBounds, TrashState } from './drag-delete';
-import { gesturePhoto, gestureSticker, stickerRect, photoLayout, projectedPhotoRect } from './layout';
+import { gestureFrame, gesturePhoto, gestureSticker, photoLayout, projectedPhotoRect, visibleStickerRect } from './layout';
+import { frameMatrix } from './frame';
 
 type Props = { depthFrame?: DepthFrame | null; onAutoCutout?: (point: { x: number; y: number }) => void; calibration?: number; view: ProjectView; options: EditOptions; disabled: boolean; onCommit: (options: EditOptions) => void; onInteracting: (value: boolean) => void; compact?: boolean; compare?: boolean; touchEnabled?: boolean; activeStickerId?: string | null; onSelectSticker?: (id: string | null) => void; trashBounds?: TrashBounds | null; onTrashState?: (state: TrashState) => void; onDropDelete?: (id: string, options: EditOptions) => void; onReorder?: (id: string, direction: 'front' | 'back') => void };
 function touchState(event: GestureResponderEvent) {
-  const touches = [...event.nativeEvent.touches].sort((a, b) => Number(a.identifier) - Number(b.identifier));
-  const first = touches[0] || event.nativeEvent, second = touches[1];
-  const x = second ? (first.pageX + second.pageX) / 2 : first.pageX;
-  const y = second ? (first.pageY + second.pageY) / 2 : first.pageY;
-  return {
-    count: touches.length,
-    x, y,
-    angle: second ? Math.atan2(second.pageY - first.pageY, second.pageX - first.pageX) * 180 / Math.PI : 0,
-    distance: second ? Math.hypot(first.pageX - second.pageX, first.pageY - second.pageY) : 0,
-  };
+  return canvasTouchFromEvent(event.nativeEvent);
 }
 
 export function GestureCanvas(props: Props) {
   const [width, setWidth] = useState(300), [internalEnabled, setEnabled] = useState(false), [internalCompare, setCompare] = useState(false);
   const enabled = props.touchEnabled ?? internalEnabled, compare = props.compare ?? internalCompare;
   const [dragging, setDragging] = useState(false);
+  const [phoneSelected,setPhoneSelected] = useState(false);
+  useEffect(()=>{if(props.activeStickerId || props.options.mode!=='frame')setPhoneSelected(false);},[props.activeStickerId,props.options.mode]);
   const visual = useRef<NativeCompositionHandle | null>(null);
   const visualFrame = useRef<number | null>(null);
   const current = useRef({ ...props, width, enabled, compare });
@@ -49,7 +45,7 @@ export function GestureCanvas(props: Props) {
     const touch = dragTouch.current;
     if (touch && deletion.current) current.current.onTrashState?.(deletion.current.move({ x: touch.x, y: touch.y }, touch.count, props.trashBounds || null));
   }, [props.trashBounds]);
-  const base = useRef<{ touch: CanvasTouch; options: EditOptions; anchorX: number; anchorY: number; stickerId: string | null } | null>(null);
+  const base = useRef<{ touch: CanvasTouch; options: EditOptions; anchorX: number; anchorY: number; stickerId: string | null; phone: boolean } | null>(null);
   const hold = useRef<HoldCutout | null>(null);
   const holdFired = useRef(false);
   useEffect(() => () => { hold.current?.cancel(); if (visualFrame.current !== null) cancelAnimationFrame(visualFrame.current); }, []);
@@ -60,6 +56,7 @@ export function GestureCanvas(props: Props) {
     const selected = current.current.activeStickerId;
     const selectedVisible = selected === 'primary' ? !current.current.options.hidePrimary && (!!current.current.view.subject || current.current.options.mode !== 'sticker') : current.current.view.stickers?.some(item => item.id === selected);
     const id = hitLayer(current.current.view, current.current.options, { x: touch.localX, y: touch.localY }, touch.displayWidth) || (touch.count > 1 && selectedVisible ? selected || null : null);
+    const phone = (!id || (id==='primary' && !current.current.view.subject)) && hitPhone(current.current.view,current.current.options,{x:touch.localX,y:touch.localY},touch.displayWidth);
     const g = photoLayout(current.current.view.project, current.current.options), unit = g.width / touch.displayWidth;
     const framePoint = unprojectFrame({ x: touch.localX * unit, y: touch.localY * unit }, g, current.current.options);
     const p = rotatePoint(framePoint, { x: g.photo.x + g.photo.width / 2, y: g.photo.y + g.photo.height / 2 }, -(current.current.options.photoRotation || 0));
@@ -70,12 +67,12 @@ export function GestureCanvas(props: Props) {
       hold.current = new HoldCutout(() => { holdFired.current = true; base.current = null; deletion.current?.cancel(); deletion.current = null; current.current.onAutoCutout?.(point); });
       hold.current.start();
     }
-    current.current.onSelectSticker?.(id);
+    setPhoneSelected(phone);current.current.onSelectSticker?.(phone ? null : id);
     current.current.trashBounds = null;
-    if (!id) { base.current = null; deletion.current = null; return; }
-    deletion.current = new DragDelete(id, { x: touch.x, y: touch.y });
-    deletion.current.move({ x: touch.x, y: touch.y }, touch.count, null);
-    base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: id === 'primary' ? null : id };
+    if (!id && !phone) { base.current = null; deletion.current = null; return; }
+    deletion.current = phone ? null : new DragDelete(id!, { x: touch.x, y: touch.y });
+    deletion.current?.move({ x: touch.x, y: touch.y }, touch.count, null);
+    base.current = { touch, options: current.current.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: id === 'primary' || phone ? null : id, phone };
   };
   const move = (touch: LocalCanvasTouch) => {
     const start = dragTouch.current;
@@ -86,12 +83,12 @@ export function GestureCanvas(props: Props) {
       const trash = deletion.current?.move({ x: touch.x, y: touch.y }, touch.count, current.current.trashBounds || null);
       if (trash) current.current.onTrashState?.(trash);
       if (touch.count !== previous.touch.count) {
-        base.current = { touch, options: latest.current || previous.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: previous.stickerId };
+        base.current = { touch, options: latest.current || previous.options, anchorX: touch.localX, anchorY: touch.localY, stickerId: previous.stickerId, phone: previous.phone };
         return;
       }
       const vectorInPlane = (angle: number, length: number) => {
         const v = { x: length * Math.cos(angle * Math.PI / 180), y: length * Math.sin(angle * Math.PI / 180) };
-        const local = previous.stickerId ? v : unprojectFrame(v, { width: 1, height: 1 }, previous.options, true);
+        const local = previous.stickerId || previous.phone ? v : unprojectFrame(v, { width: 1, height: 1 }, previous.options, true);
         return { angle: Math.atan2(local.y, local.x) * 180 / Math.PI, distance: Math.hypot(local.x, local.y) };
       };
       const from = vectorInPlane(previous.touch.angle || 0, previous.touch.distance), to = vectorInPlane(touch.angle || 0, touch.distance);
@@ -105,7 +102,8 @@ export function GestureCanvas(props: Props) {
       hold.current?.cancel();
       if (!latest.current) { current.current.onInteracting(true); setDragging(true); }
       let options: EditOptions;
-      if (previous.stickerId) {
+      if (previous.phone) options=gestureFrame(previous.options,current.current.width,gesture);
+      else if (previous.stickerId) {
         const sticker = current.current.view.stickers?.find(item => item.id === previous.stickerId);
         if (!sticker) return;
         const g = photoLayout(current.current.view.project, previous.options);
@@ -154,15 +152,26 @@ export function GestureCanvas(props: Props) {
   const box = props.view.subjectBounds || { x: 0, y: 0, width: 1, height: 1 };
   const rootRect = projectedPhotoRect(props.view.project, options, box);
   const selectedTransform = options.stickerTransforms?.find(item => item.id === props.activeStickerId), selectedSticker = props.view.stickers?.find(item => item.id === props.activeStickerId);
-  const selectedRect = selectedTransform && selectedSticker ? rotatedRect(stickerRect(selectedSticker, selectedTransform, layout), selectedTransform.rotation || 0) : props.activeStickerId === 'primary' && primaryVisible ? rootRect : null;
+  const selectedRect = selectedTransform && selectedSticker ? visibleStickerRect({...selectedSticker,bounds:selectedSticker.bounds||hitMaskBounds(selectedSticker.hitMask)},selectedTransform,layout) : props.activeStickerId === 'primary' && primaryVisible ? rootRect : null;
+  const matrix=frameMatrix(options), q=layout.screen;
+  const phoneCorners=[[q.x-14,q.y-38],[q.x+q.width+20,q.y-38],[q.x+q.width+20,q.y+q.height+44],[q.x-14,q.y+q.height+44]].map(([x,y])=>({x:matrix.a*(x-layout.width/2)+matrix.c*(y-layout.height/2)+layout.width/2,y:matrix.b*(x-layout.width/2)+matrix.d*(y-layout.height/2)+layout.height/2}));
+  const phoneRect={x:Math.min(...phoneCorners.map(p=>p.x)),y:Math.min(...phoneCorners.map(p=>p.y)),width:Math.max(...phoneCorners.map(p=>p.x))-Math.min(...phoneCorners.map(p=>p.x)),height:Math.max(...phoneCorners.map(p=>p.y))-Math.min(...phoneCorners.map(p=>p.y))};
+  const phoneActive=phoneSelected && options.mode==='frame' && !options.spatialEnabled;
   return <View style={props.compact ? { flex: 1 } : undefined}>
     {!props.compact && <View style={styles.toolbar}><Pressable disabled={props.disabled} onPress={() => setEnabled(!enabled)} style={styles.tool}><Text style={styles.label}>터치 조절</Text></Pressable><Pressable disabled={props.disabled} onPressIn={() => setCompare(true)} onPressOut={() => setCompare(false)} style={styles.tool}><Text style={styles.label}>누르고 원본 보기</Text></Pressable></View>}
     <View ref={nativeCanvas} collapsable={false} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...responder.panHandlers} style={{ width: '100%', height: layout.height * scale, overflow: 'hidden', backgroundColor: options.background }}>
       {options.mode === 'sticker' && !compare && <View pointerEvents="none" style={[StyleSheet.absoluteFill, { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#F4F1F7' }]}>{Array.from({ length: 6 * Math.ceil(layout.height / layout.width * 6) }, (_, i) => <View key={i} style={{ width: width / 6, height: width / 6, backgroundColor: (Math.floor(i / 6) + i % 6) % 2 ? '#E0DCE7' : '#F4F1F7' }} />)}</View>}
       {compare ? <CachedImage pointerEvents="none" data={props.view.source} style={StyleSheet.absoluteFill} resizeMode="contain" /> : <NativeCompositionCanvas depthFrame={props.depthFrame} ref={visual} view={props.view} options={options} width={width} dragging={dragging} calibration={props.calibration} />}
+      {phoneActive && !compare && !dragging && <>
+        <View pointerEvents="none" style={{position:'absolute',left:phoneRect.x*scale,top:phoneRect.y*scale,width:phoneRect.width*scale,height:phoneRect.height*scale,borderWidth:1.5,borderColor:'#ADFFD3',borderStyle:'dashed'}} />
+        <View onStartShouldSetResponder={()=>true} style={{position:'absolute',left:8,right:8,top:8,zIndex:210,borderRadius:12,padding:8,backgroundColor:'#282131EE',alignItems:'center',gap:6}}>
+          <Text style={{color:'#ADFFD3',fontSize:11}}>폰 선택 · 한 손가락 이동 · 두 손가락 크기·각도</Text>
+          <View style={{flexDirection:'row',gap:4}}>{[{label:t("작게 −"),scale:-.05,angle:0},{label:t("크게 +"),scale:.05,angle:0},{label:'↶ 2°',scale:0,angle:-2},{label:'↷ 2°',scale:0,angle:2}].map(item=><Pressable key={item.label} accessibilityRole="button" accessibilityLabel={t("폰 {0}", item.label)} disabled={props.disabled} onPress={()=>props.onCommit({...options,frameScale:Math.max(.7,Math.min(1.5,options.frameScale+item.scale)),tilt:Math.max(-18,Math.min(18,options.tilt+item.angle))})} style={{padding:8,borderRadius:8,backgroundColor:'#514362'}}><Text style={{color:'#fff',fontSize:11}}>{item.label}</Text></Pressable>)}</View>
+        </View>
+      </>}
       {selectedRect && !compare && !dragging && <View pointerEvents="none" style={{ position: 'absolute', left: selectedRect.x * scale, top: selectedRect.y * scale, width: selectedRect.width * scale, height: selectedRect.height * scale, zIndex: 100, borderWidth: 1.5, borderColor: '#A58ADC', borderStyle: 'dashed' }} />}
       {selectedRect && width >= 96 && visibleOrder.length > 1 && !dragging && !compare && props.onReorder && <View onStartShouldSetResponder={() => true} style={{ position: 'absolute', left: Math.max(5, Math.min(width - 89, selectedRect.x * scale)), top: Math.max(5, Math.min(layout.height * scale - 39, selectedRect.y * scale - 40)), zIndex: 200, flexDirection: 'row', gap: 3, backgroundColor: '#282131EE', padding: 3, borderRadius: 12 }}>
-        {(['back', 'front'] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={direction === 'front' ? '레이어 한 단계 앞으로' : '레이어 한 단계 뒤로'} disabled={props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0)} onPress={() => props.onReorder?.(activeKey!, direction)} style={{ width: 36, height: 30, justifyContent: 'center', alignItems: 'center', opacity: props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0) ? 0.3 : 1 }}><Text style={{ color: '#fff', fontSize: 13 }}>{direction === 'front' ? '↑ 앞' : '↓ 뒤'}</Text></Pressable>)}
+        {(['back', 'front'] as const).map(direction => <Pressable key={direction} accessibilityRole="button" accessibilityLabel={direction === 'front' ? t("레이어 한 단계 앞으로") : t("레이어 한 단계 뒤로")} disabled={props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0)} onPress={() => props.onReorder?.(activeKey!, direction)} style={{ width: 36, height: 30, justifyContent: 'center', alignItems: 'center', opacity: props.disabled || (direction === 'front' ? activeIndex === visibleOrder.length - 1 : activeIndex === 0) ? 0.3 : 1 }}><Text style={{ color: '#fff', fontSize: 13 }}>{direction === 'front' ? t("↑ 앞") : t("↓ 뒤")}</Text></Pressable>)}
       </View>}
     </View>
     {!props.compact && enabled && <Text style={styles.hint}>한 손가락으로 이동 · 두 손가락으로 확대·회전</Text>}

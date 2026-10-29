@@ -32,6 +32,14 @@ Metro는 8082, 사진 합성 API는 4180을 사용합니다. QR을 Expo Go로 �
 
 ## 실제 Meta 모델 연결
 
+AI 실험 기록은 비공개 `.local/ai-tests/`에 모읍니다. `index.html`은 전후 이미지·정확한 프롬프트·설정·시간·비용을 볼 수 있는 갤러리이며, `README.md`, `index.json`, `calls.jsonl`도 함께 생성됩니다. `npm run ai:log`는 네트워크나 모델 호출 없이 보고서만 갱신합니다. 기존 Meta 어댑터의 실제 요청은 자동 기록되며, 추가 실험은 `recordedModelFetch`와 승인 범위 정보를 사용합니다. 예상 비용과 실제 Billing 차감액은 구분하고, 기록하지 않은 과거 값은 미확인으로 남깁니다. 사진과 응답은 공개 Git 저장소에 포함하지 않습니다.
+
+AI experiment records are private under `.local/ai-tests/`. Open `index.html` for before/after images, exact prompts, settings, timings and costs; Markdown, JSON and JSONL exports are included. `npm run ai:log` rebuilds reports offline. Live adapter requests are recorded automatically; additional experiments must use `recordedModelFetch` with the approved scope. Estimated charges and verified Billing charges are separate. Historical missing values remain unknown. Photos and responses are excluded from the public repository.
+
+누끼 완료 후 `그대로 사용 / Use as is` 또는 `잘린 부분 복구 / Repair cutout`를 선택합니다. 복구할 부분과 함께 남길 물체를 입력한 뒤 전후를 비교해 적용합니다. `사진 → 소재 보관함 / Photo → Asset library`에서 원본 누끼·생성 이미지·복구본을 추가 AI 호출 없이 다시 가져올 수 있습니다. 같은 요청은 영속 캐시를 우선 사용하고, 후속 단계 실패 시 성공한 이전 결과를 재사용합니다. 실행 전 비용 확인 창은 없습니다. 새 호출 한도는 기존 설정을 그대로 따릅니다. 자세한 구현·검증 범위는 [복구와 재사용](docs/ai-repair-workflow.md)을 참고하세요.
+
+After cutout, choose Use as is or Repair cutout. Describe missing parts and attached objects, compare results and apply. Photo → Asset library reuses cutouts, generated images and repaired versions without new inference. Identical requests prefer persistent caches and failed-stage retries retain successful earlier outputs. There is no pre-execution cost dialog; configured model caps still apply. See the [repair and reuse notes](docs/ai-repair-workflow.md).
+
 대회 크레딧 신청·Billing·키 생성·터미널 설정·첫 실제 호출의 전체 순서는 [MODEL_API_CONNECT.md](MODEL_API_CONNECT.md)를 따른다. 2026-10-27 사용자가 공식 크레딧 신청폼 제출 완료를 알렸다. Billing 지급과 약관 전문은 아직 확인하지 않았으며 미확인 조건은 추정하지 않는다.
 
 먼저 참가자 본인이 크레딧을 신청하고 Billing에 실제 지급·결제 설정·모델 권한이 반영됐는지 확인합니다. 모델 키는 로컬 비밀 입력으로 설정합니다.
@@ -41,7 +49,7 @@ npm run setup:model
 npm start
 ```
 
-설정 명령은 숨김 입력으로 API 키와 사용자가 정한 **SAM/이미지 전체 호출 상한**을 submission/.env에 저장합니다. 기존 .env가 있으면 덮어쓰지 않습니다. 기본 상한은 0이며 설정 전에는 유료 호출을 차단합니다. 카드 등록이나 약관 동의·크레딧 신청을 대신 실행하지 않습니다.
+설정 명령은 숨김 입력으로 API 키와 사용자가 정한 **SAM/이미지 전체 호출 상한**을 submission/.env에 저장합니다. 기존 .env의 서버 주소·연결 토큰과 다른 설정은 보존하고 모델 설정만 갱신합니다. 준비 단계에는 두 상한 모두 0을 입력하세요. 설정 스크립트는 AI를 호출하지 않습니다. 카드 등록이나 약관 동의·크레딧 신청을 대신 실행하지 않습니다.
 
 설정 전에 Billing의 실제 $150 지급과 팀 일치를 확인해야 합니다. `HACKATHON_CREDITS_CONFIRMED=true`라는 수동 확인 기록이 없으면 유료 요청을 차단합니다. `npm run check:model`은 추론 없이 키와 모델 목록을 점검합니다. 키 설정 후에는 실행 중 서버를 Ctrl+C로 종료하고 `npm start`로 재시작해야 적용됩니다.
 

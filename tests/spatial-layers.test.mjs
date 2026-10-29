@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { extendInvisibleDepth, padTransparentColours } from '../server/spatial-layers.mjs';
-import { surfaceMesh, depthCamera, projectDepthPoint } from '../src/depth-mesh.ts';
+import { createDepthFraming, surfaceMesh, depthCamera, projectDepthPoint } from '../src/depth-mesh.ts';
 import { createApp } from '../server/index.mjs';
 
 test('invisible depth and RGB extension preserve alpha and every original visible pixel', () => {
@@ -57,15 +57,44 @@ test('real background margins extend world coverage without inventing texture pi
   }
 });
 
+test('fixed initial crop reveals margins on tilt without live zoom or exposed background edges', () => {
+  for (const bounds of [undefined,{x:-.1,y:-.12,width:1.2,height:1.24}]) {
+    const s={id:'backdrop',width:800,height:1000,gridWidth:4,gridHeight:4,depth:[0,255,0,255,255,10,240,0,0,245,20,255,255,0,255,0],baseZ:-.6,relief:.18,bounds};
+    const mesh=surfaceMesh(s), framing=createDepthFraming(s), fixedScale=framing.scale;
+    assert.ok(fixedScale>=1.12 && fixedScale<1.4,'modest crop is selected once');
+    const centered=framing.pan({x:0,y:0},.7);assert.ok(Math.abs(centered.x)+Math.abs(centered.y)<1e-8);
+    const indices=[0,3,15,12];
+    for(const i of indices) assert.ok(Math.abs(mesh.vertices[i*5+2]-s.baseZ)<1e-6,'noisy depth cannot bend the source boundary');
+    for(let y=-1;y<=1.001;y+=.1)for(let x=-1;x<=1.001;x+=.1)for(const strength of [.3,.7,1]) {
+      const input={x,y}, pan=framing.pan(input,strength), camera=depthCamera(input,strength);
+      const quad=indices.map(i=>{const p=projectDepthPoint([...mesh.vertices.slice(i*5,i*5+3)],.8,camera);return{x:p.x*fixedScale+pan.x,y:p.y*fixedScale+pan.y};});
+      for(const corner of [{x:-1,y:-1},{x:1,y:-1},{x:1,y:1},{x:-1,y:1}])for(let i=0;i<4;i++) {
+        const p=quad[i],q=quad[(i+1)%4];
+        assert.ok((q.x-p.x)*(corner.y-p.y)-(q.y-p.y)*(corner.x-p.x)<1e-5,'viewport remains inside real source pixels');
+      }
+      assert.equal(framing.scale,fixedScale,'tilt never changes magnification');
+    }
+    const up=framing.pan({x:0,y:1},1),down=framing.pan({x:0,y:-1},1);
+    assert.ok(up.y<-.05 && down.y>.05,'tilting reveals opposite cropped margins instead of pinning the view');
+    if(bounds) {
+      const point=[0,-1,0], neutral=projectDepthPoint(point,.8,depthCamera({x:0,y:0},1)).y*fixedScale;
+      const tilted=projectDepthPoint(point,.8,depthCamera({x:0,y:-1},1)).y*fixedScale+down.y;
+      assert.ok(neutral<-1 && tilted>-1,'bottom of composition starts cropped and can be revealed');
+    }
+  }
+});
+
 test('layered preview preserves the neutral composite, phone rigidity, project data and Meta usage', async t => {
   await mkdir('.local/tests',{recursive:true});const root=await mkdtemp(path.resolve('.local/tests/layers-3d-'));
-  const app=await createApp({root,token:'layers-3d',key:'',caps:{sam:0,image:0},depthEstimator:async()=>({width:2,height:2,depth:Uint8Array.from([0,80,160,255])})});
+  const app=await createApp({root,token:'layers-3d',key:'',caps:{sam:0,image:0},faceDetector:async()=>[{x:.3,y:.15,width:.3,height:.3,confidence:1}],depthEstimator:async()=>({width:2,height:2,depth:Uint8Array.from([0,80,160,255])})});
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>app.server.close(resolve)));
   const post=async(route,data)=>{const r=await fetch(`http://127.0.0.1:${app.server.address().port}${route}`,{method:'POST',headers:{Authorization:'Bearer layers-3d','Content-Type':'application/json'},body:JSON.stringify(data)});const v=await r.json();assert.equal(r.status,200,v.error);return v;};
   const view=await post('/fixture',{}), before=await app.store.get(view.project.id);
   const frame=await post('/spatial',{projectId:view.project.id,renderer:'layered'});
   assert.deepEqual(frame.layers.map(s=>s.id),['backdrop','phone','primary-plane']);
   assert.equal(frame.layers[1].relief,0);assert.ok(frame.layers[2].relief>0);
+  assert.ok(frame.layers[2].faceMask?.some(value=>value>=128),'source face mask follows the composition into its foreground layer');
+  assert.ok(frame.layers[2].focus?.weight>0,'foreground focus is measured from visible alpha rather than transparent padding');
   for(const layer of frame.layers){
     surfaceMesh(layer);const meta=await sharp(Buffer.from(layer.textureImage,'base64')).metadata();
     assert.equal(meta.width&(meta.width-1),0);assert.equal(meta.height&(meta.height-1),0);

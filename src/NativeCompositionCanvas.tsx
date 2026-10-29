@@ -1,11 +1,12 @@
+import { LocalizedText as NativeText } from './i18n-react';
 import React, { forwardRef, lazy, Suspense, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
-import { ActivityIndicator, Animated, StyleSheet, Text as NativeText, View } from 'react-native';
+import { ActivityIndicator, Animated, StyleSheet, View } from 'react-native';
 import Svg, { G, Rect, Circle, Ellipse, Path, Text, ClipPath, LinearGradient, RadialGradient, Stop, Defs } from 'react-native-svg';
 import type { EditOptions, ProjectView } from './client';
 import type { SceneNode } from './composition-scene';
 import { buildCompositionScene } from './composition-scene';
 import { nativeSceneChildren } from './native-scene-children';
-import { nativeCompositionPlan } from './native-composition-plan';
+import { framePreviewMatrix, nativeCompositionPlan } from './native-composition-plan';
 import { backgroundPhotoRect, stickerRect } from './layout';
 import { orderedLayers } from './layer-order';
 import { useSpatialMotion } from './use-spatial-motion';
@@ -61,6 +62,7 @@ const PhoneChrome = memo(function PhoneChrome({ source, options }: { source: { w
 export type NativeCompositionHandle = { setPose: (options: EditOptions) => void };
 export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, { view: ProjectView; options: EditOptions; width: number; calibration?: number; dragging?: boolean; depthFrame?: DepthFrame | null }>(function NativeCompositionCanvas({ view, options, width, calibration = 0, dragging = false, depthFrame }, ref) {
   const plan = nativeCompositionPlan(view.project, options), unit = width / plan.width;
+  const phonePlane = useRef<React.ComponentRef<typeof View>>(null), subjectPlane = useRef<React.ComponentRef<typeof View>>(null);
   const poses = useMemo(() => new Map<string, ImagePose>(), [view.project.id, unit]);
   const sources = useRef(new Map<string, { data: string; source: { uri: string } }>());
   const layerIds = new Set((view.stickers || []).map(item => item.id));
@@ -84,6 +86,10 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
   }
   const update = (next: EditOptions) => {
     const g = nativeCompositionPlan(view.project, next);
+    const frameMoving=options.mode==='frame' && ['frameScale','frameX','frameY','tilt'].some(key=>next[key as keyof EditOptions]!==options[key as keyof EditOptions]);
+    const matrix=frameMoving ? framePreviewMatrix(view.project,options,next,unit) : g.matrix;
+    phonePlane.current?.setNativeProps({style:{transform:[{matrix}]}});subjectPlane.current?.setNativeProps({style:{transform:[{matrix}]}});
+    if(frameMoving) return;
     poses.get('primary')?.update(g.photo, next.photoRotation);
     for (const t of next.stickerTransforms) { const item = view.stickers?.find(s => s.id === t.id); if (item) poses.get(t.id)?.update(stickerRect(item, t, g), t.rotation); }
     if (view.backgroundPhoto) poses.get('background')?.update(backgroundPhotoRect(view.backgroundPhoto, g, next));
@@ -130,12 +136,12 @@ export const NativeCompositionCanvas = memo(forwardRef<NativeCompositionHandle, 
   return <View pointerEvents="none" style={StyleSheet.absoluteFill}>
     {options.mode !== 'sticker' && <View style={[StyleSheet.absoluteFill, { backgroundColor: options.background }]} />}
     {background}{background && options.backgroundDim > 0 && <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', opacity: options.backgroundDim }]} />}
-    <View style={[StyleSheet.absoluteFill, { transform: offset('scene') }]}><View style={plane}>
+    <View style={[StyleSheet.absoluteFill, { transform: offset('scene') }]}><View ref={phonePlane} style={plane}>
       {options.mode === 'frame' && <><PhoneChrome source={view.project} options={options} />{raw && !options.hidePrimary && <View style={clip(plan.screenClip)}><Texture source={raw} pose={photoPose} left={plan.screenClip.x} top={plan.screenClip.y} /></View>}</>}
       {options.decorationDepth === 'back' && ornament}
     </View></View>
     {orderedLayers(options).map(id => {
-      if (id === 'primary') return <View key={id} style={[StyleSheet.absoluteFill, { transform: offset('foreground') }]}><View style={plane}>{foreground()}{options.decorationDepth === 'front' && ornament}</View></View>;
+      if (id === 'primary') return <View key={id} style={[StyleSheet.absoluteFill, { transform: offset('foreground') }]}><View ref={subjectPlane} style={plane}>{foreground()}{options.decorationDepth === 'front' && ornament}</View></View>;
       const item = view.stickers?.find(s => s.id === id), pixels = item && source(`sticker:${id}`, item.data), p = poses.get(id);
       return pixels && p ? <View key={id} style={[StyleSheet.absoluteFill, { transform: offset('sticker') }]}><Texture source={pixels} pose={p} /></View> : null;
     })}

@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp} from 'node:fs/promises';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import sharp from 'sharp';
+import {createApp} from '../server/index.mjs';
+const wire='<0f>0<|box;x1=211;y1=228;x2=270;y2=254;w=320;h=334|><|mask;x=0;y=0;data=27,60,~!!!!M!0c[0o91w?q1!pIH4pPRVp2B3\'7`e.ioeAf6-k/#Xd8%dX9x(|>';
+test('identical segmentation in another project reuses the result after the paid cap is exhausted',async t=>{
+ await mkdir('.local/tests',{recursive:true});const root=await mkdtemp(path.resolve('.local/tests/reuse-segment-'));let calls=0;
+ const app=await createApp({root,token:'test',key:'mock',creditsConfirmed:true,caps:{image:0,sam:1},fetcher:async()=>{calls++;return new Response(JSON.stringify({status:'completed',id:'mock',output_text:wire}));}});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>app.server.close(r)));
+ const post=async(route,data)=>{const r=await fetch(`http://127.0.0.1:${app.server.address().port}${route}`,{method:'POST',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:JSON.stringify(data)});const result=await r.json();assert.equal(r.status,200,result.error);return result;};
+ const image=(await sharp({create:{width:320,height:334,channels:3,background:'#123456'}}).png().toBuffer()).toString('base64');
+ const first=await post('/projects',{image}),second=await post('/projects',{image});
+ for(const project of [first,second]){const result=await post('/segment',{projectId:project.project.id,jobId:randomUUID(),prompt:'cup'});assert.equal(result.project.candidates.length,1);assert.equal(result.usage.sam.reserved,1);}
+ assert.equal(calls,1);
+});
+test('repair preserves completed stages, reuses across restarts with zero caps, and keeps element pose on apply',async t=>{
+ await mkdir('.local/tests',{recursive:true});const root=await mkdtemp(path.resolve('.local/tests/reuse-repair-'));
+ const image=await sharp({create:{width:320,height:334,channels:3,background:'#ffffff'}}).composite([{input:Buffer.from('<svg width="320" height="334"><rect x="100" y="60" width="140" height="230" fill="#683a21"/></svg>')}]).png().toBuffer();
+ const counts={image:0,sam:0};let failSam=true;
+ const provider=async(_url,init)=>{const body=JSON.parse(init.body);if(body.model==='muse-image-1.0'){counts.image++;return new Response(JSON.stringify({status:'completed',output:[{type:'image_generation_call',result:image.toString('base64')}]}));}counts.sam++;if(failSam){failSam=false;return new Response('{}',{status:503});}return new Response(JSON.stringify({id:'mock-sam',status:'completed',output_text:wire}));};
+ let app=await createApp({root,token:'test',key:'mock',creditsConfirmed:true,caps:{image:1,sam:2},fetcher:provider});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>app.server.close(r)));
+ const call=async(route,data)=>{const r=await fetch(`http://127.0.0.1:${app.server.address().port}${route}`,{method:data?'POST':'GET',headers:{Authorization:'Bearer test','Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});return{status:r.status,data:await r.json()};};
+ let {data:view}=await call('/projects',{image:image.toString('base64')});
+ ({data:view}=await call('/cutout',{projectId:view.project.id,points:[{x:.1,y:.1},{x:.9,y:.1},{x:.9,y:.9},{x:.1,y:.9}]}));
+ const originalId=view.primaryAssetId;assert.ok(originalId);
+ const request={assetId:originalId,instruction:'Complete the base and keep the spoon',jobId:randomUUID()};
+ const failed=await call('/repair',request);assert.equal(failed.status,502);assert.deepEqual(counts,{image:1,sam:1});
+ const resumed=await call('/repair',{...request,jobId:randomUUID(),retryFailed:true});assert.equal(resumed.status,200,resumed.data.error);assert.deepEqual(counts,{image:1,sam:2});assert.equal(resumed.data.parentId,originalId);
+ const assets=(await call('/assets')).data.assets;assert.equal(assets.length,3);assert.ok(assets.some(a=>a.kind==='generated'),'successful generated image stays reusable independently of segmentation');
+ const options={...view.options,mode:'frame',frameScale:.9,tilt:8,x:.1,y:-.1,zoom:1.3};await call('/options',{projectId:view.project.id,options});
+ const applied=await call('/assets/apply',{projectId:view.project.id,assetId:resumed.data.id,stickerId:'primary',expectedAssetId:originalId});assert.equal(applied.status,200,applied.data.error);assert.deepEqual(applied.data.options,options);
+ const restored=await call('/assets/apply',{projectId:view.project.id,assetId:originalId,stickerId:'primary',expectedAssetId:applied.data.primaryAssetId});assert.equal(restored.status,200,restored.data.error);assert.equal(restored.data.subject,view.subject);
+ const added=await call('/assets/add',{projectId:view.project.id,assetId:resumed.data.id});assert.equal(added.status,200);const target=added.data.stickers.at(-1),pose=added.data.options;
+ const replacement=await call('/assets/apply',{projectId:view.project.id,assetId:originalId,stickerId:target.id,expectedAssetId:target.assetId});assert.equal(replacement.status,200,replacement.data.error);assert.equal(replacement.data.stickers.at(-1).id,target.id);assert.deepEqual(replacement.data.options,pose);
+ await new Promise(r=>app.server.close(r));
+ app=await createApp({root,token:'test',key:'',creditsConfirmed:false,caps:{image:0,sam:0},fetcher:async()=>{throw Error('Provider must not be called');}});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));
+ const reused=await call('/repair',{...request,jobId:randomUUID()});assert.equal(reused.status,200,reused.data.error);assert.equal(reused.data.id,resumed.data.id);assert.deepEqual(counts,{image:1,sam:2});
+ const stale=await call('/assets/apply',{projectId:view.project.id,assetId:originalId,stickerId:target.id,expectedAssetId:resumed.data.id});assert.equal(stale.status,409,'a stale preview cannot overwrite another edit');
+});

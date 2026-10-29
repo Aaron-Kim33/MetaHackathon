@@ -1,5 +1,7 @@
+import { LocalizedText as Text } from './i18n-react';
+import { t } from './i18n';
 import React, { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 import type { ProjectView } from './client';
 import { pageImagePoint } from './layout';
 import type { BrushPoint } from './layout';
@@ -12,7 +14,7 @@ export function SourcePicker(props: Props) {
   current.current = props;
   const [width, setWidth] = useState(300);
   const height = width * props.view.project.height / props.view.project.width;
-  return <Pressable ref={canvas} collapsable={false} disabled={props.disabled} accessibilityRole="button" accessibilityLabel="사진에서 분리할 대상 선택" onLayout={event => setWidth(event.nativeEvent.layout.width)} delayLongPress={600} onLongPress={event => {
+  return <Pressable ref={canvas} collapsable={false} disabled={props.disabled} accessibilityRole="button" accessibilityLabel={t("사진에서 분리할 대상 선택")} onLayout={event => setWidth(event.nativeEvent.layout.width)} delayLongPress={600} onLongPress={event => {
     const { pageX: touchX, pageY: touchY } = event.nativeEvent;
     const project = current.current.view.project;
     const source = current.current.view.source;

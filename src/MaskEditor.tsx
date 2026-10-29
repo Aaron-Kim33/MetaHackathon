@@ -1,5 +1,7 @@
+import { LocalizedText as Text } from './i18n-react';
+import { t } from './i18n';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { ProjectView } from './client';
 import { CachedImage } from './CachedImage';
@@ -53,7 +55,7 @@ export function MaskEditor(props: Props) {
     if (busy) return;
     setBusy(true); setError('');
     try { if (reset) await props.onReset(); else await props.onApply(records.current); update([]); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : '보정을 적용하지 못했어요.'); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : t("보정을 적용하지 못했어요.")); }
     finally { setBusy(false); }
   };
   const tool = (title: string, selected: boolean, onPress: () => void, disabled = false) => <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled: busy || drawing || disabled }} disabled={busy || drawing || disabled} onPress={onPress} style={[styles.button, props.embedded && { paddingHorizontal: 10, paddingVertical: 9 }, selected && styles.selected, (busy || drawing || disabled) && styles.disabled]}><Text style={[styles.label, selected && styles.selectedLabel]}>{title}</Text></Pressable>;
@@ -68,15 +70,15 @@ export function MaskEditor(props: Props) {
         return <View pointerEvents="none" key={`${index}-${i}`} style={{ position: 'absolute', left: image.x + p.x * image.width - r, top: p.y * image.height - r, width: r * 2, height: r * 2, borderRadius: r, backgroundColor: outline ? '#BAFFB9' : '#e15c6d55' }} />;
       }))}
     </View>;
-  const sizes = ([0.01, 0.025, 0.05] as const).map((value, i) => <React.Fragment key={value}>{tool(['작게', '중간', '크게'][i], radius === value, () => setRadius(value))}</React.Fragment>);
+  const sizes = ([0.01, 0.025, 0.05] as const).map((value, i) => <React.Fragment key={value}>{tool([t("작게"), t("중간"), t("크게")][i], radius === value, () => setRadius(value))}</React.Fragment>);
   const content = <View style={{ flex: 1, width: '100%', minHeight: 0, gap: 6 }}>
-    <View style={[styles.header, { flexShrink: 0, minHeight: 38 }]}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{outline ? '테두리로 자르기' : '지우개 보정'}</Text>{tool('닫기', false, props.onClose)}</View>
+    <View style={[styles.header, { flexShrink: 0, minHeight: 38 }]}><Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{outline ? t("테두리로 자르기") : t("지우개 보정")}</Text>{tool(t("닫기"), false, props.onClose)}</View>
     <View style={[styles.row, { flexShrink: 0, gap: 6 }]}>{outline ? <Text style={{ color: '#ddd', fontSize: 11, flex: 1 }}>남길 부분을 한 바퀴 그려 주세요. 끝점은 자동으로 이어져요.</Text> : sizes}{tool('↶', false, () => update(records.current.slice(0, -1)), !strokes.length)}</View>
     <View style={{ flex: 1, minHeight: 0, width: '100%', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} onLayout={event => { const { width, height } = event.nativeEvent.layout; setSlot(current => current.width === width && current.height === height ? current : { width, height }); }}>
       {drawingCanvas}
     </View>
     {error ? <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.error, { flexShrink: 0, color: '#FFB9C1' }]}>{error}</Text> : null}
-    <View style={[styles.row, { flexShrink: 0, minHeight: 52, paddingVertical: 4, gap: 6 }]}>{tool(busy ? '적용 중…' : outline ? '자르기 적용' : '보정 적용', true, () => { void action(false); }, !strokes.length || (outline && strokes[0].points.length < 3))}{!outline && tool('지우개 보정 초기화', false, () => { void action(true); })}</View>
+    <View style={[styles.row, { flexShrink: 0, minHeight: 52, paddingVertical: 4, gap: 6 }]}>{tool(busy ? t("적용 중…") : outline ? t("자르기 적용") : t("보정 적용"), true, () => { void action(false); }, !strokes.length || (outline && strokes[0].points.length < 3))}{!outline && tool(t("지우개 보정 초기화"), false, () => { void action(true); })}</View>
   </View>;
   return props.embedded ? content : <Modal visible={props.visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => { if (!busy) props.onClose(); }}><SafeAreaView style={[styles.safe, { padding: 16, backgroundColor: '#19171F' }]}>{content}</SafeAreaView></Modal>;
 }

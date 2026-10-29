@@ -7,6 +7,15 @@ import { ModelJobs } from '../server/store.mjs';
 
 async function temporary(prefix) { await mkdir('.local/tests', { recursive: true }); return mkdtemp(path.resolve('.local/tests', prefix)); }
 
+test('explicitly disabled app limits retain durable deduplication and usage counts',async()=>{
+ const root=await temporary('unlimited-jobs-'),jobs=new ModelJobs(path.join(root,'jobs.json'),{sam:0,image:0},{limitsDisabled:true});await jobs.init();
+ let calls=0;const id=randomUUID();
+ await jobs.run(id,'image','first',async()=>{calls++;return {done:true};});
+ await jobs.run(id,'image','first',()=>{throw Error('must reuse');});
+ await jobs.run(randomUUID(),'image','second',async()=>{calls++;});
+ assert.equal(calls,2);assert.deepEqual(jobs.usage().image,{reserved:2,cap:null});
+});
+
 test('simultaneous requests cannot exceed the cap; repeated ID reuses a durable result', async () => {
   const root = await temporary('jobs-');
   const jobs = new ModelJobs(path.join(root, 'jobs.json'), { sam: 1, image: 1 }); await jobs.init();

@@ -17,7 +17,7 @@
     "android": {
       "usesCleartextTraffic": true,
       "package": "app.reeltalk.popout",
-      "versionCode": 3
+      "versionCode": 5
     },
     "plugins": [
       [
@@ -39,7 +39,14 @@
           "motionPermission": "휴대폰 기울기에 맞춰 입체 미리보기를 움직입니다."
         }
       ],
-      "./plugins/with-subject-lift.cjs"
+      "./plugins/with-subject-lift.cjs",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow microphone access for voice descriptions. 음성 설명을 입력하려면 마이크 접근을 허용해 주세요.",
+          "speechRecognitionPermission": "Allow speech recognition for voice descriptions. 음성 설명을 입력하려면 음성 인식을 허용해 주세요."
+        }
+      ]
     ],
     "scheme": "popout"
   }

@@ -1,9 +1,9 @@
-export type ToolId = 'photo' | 'subject' | 'position' | 'decoration' | 'background' | 'more';
+export type ToolId = 'photo' | 'subject' | 'position' | 'decoration' | 'background' | 'repair' | 'more' | 'library';
 export function editorLayout(height: number, panelOpen: boolean, keyboardOpen: boolean) {
   const stageHeight = Math.max(0, height);
-  const panelHeight = panelOpen ? Math.max(0, Math.min(keyboardOpen ? 220 : 290, height * (keyboardOpen ? 0.45 : 0.36))) : 0;
+  const panelHeight = panelOpen ? Math.max(0, Math.min(keyboardOpen ? 110 : 145, height * (keyboardOpen ? 0.225 : 0.18))) : 0;
   const showRail = !keyboardOpen && height >= 300;
-  return { panelHeight, stageHeight, showRail, railButtonHeight: Math.min(46, Math.max(24, (stageHeight - 160) / 6)) };
+  return { panelHeight, stageHeight, showRail, railButtonHeight: Math.min(46, Math.max(24, (stageHeight - 180) / 7)) };
 }
 export function fitCanvas(width: number, height: number, ratio: number, _railVisible: boolean) {
   const railWidth = 0;

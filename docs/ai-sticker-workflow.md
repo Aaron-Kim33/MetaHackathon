@@ -1,0 +1,11 @@
+# Reusable AI stickers
+
+The **AI 생성 / AI Create** tool takes a description, generates an isolated subject using Muse Image, then removes its background with SAM. The result is cropped to its visible alpha bounds and saved to the persistent asset library before any canvas addition.
+
+Voice entry uses `expo-speech-recognition` with the phone's speech recognition service (Korean or English follows the app language). It fills the editable description; it never starts generation automatically. Audio files are not persisted by the app. The operating system's selected recognition service may use the network. Permissions, missing services and recognition failures show localized messages with typing as a fallback. The updated native development build is required; an older build shows an update message instead of crashing. Microphone capture is aborted when leaving the panel or backgrounding the app. iOS integration is configured but cannot be built or device-tested on this Windows workstation.
+
+- Preview and **캔버스에 추가 / Add to canvas** are separate steps. Each addition creates an independent normal sticker with its own transform; existing elements and their poses remain intact.
+- Finished assets appear under **이전에 만든 스티커 / Your saved stickers**. They can be selected and added to any project without model calls, including after server/app restart. The original generated image remains available in the general asset library.
+- Exact generated prompts and model settings identify cached images; source image, segmentation prompt and model settings identify cached masks. A fresh description normally needs one image request and one SAM request. Identical inputs reuse completed stages.
+- Failed or uncertain stages never retry automatically. The request ID is persisted before sending. **실패 단계 다시 시도 / Retry failed step** is an explicit action; successful earlier stages remain cached. **마지막 AI 작업 확인 / Check last AI job** retrieves completed assets after a timeout without inference.
+- Requests use the existing Meta adapter, experiment recorder and call caps. No per-action cost approval modal is added. Implementation tests use mocked providers and isolated `.local/tests` roots. Production credits and call caps are unchanged.

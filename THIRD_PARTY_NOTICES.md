@@ -7,3 +7,5 @@ The Android subject cutout feature uses Google's MagicTouch v2 interactive image
 - Model SHA256: `38431bc66b883404e8397f74c3579404315b9b52b04a46c6346fe906a7309b03`.
 
 Run `npm run setup:cutout` before building Android, or use `npm run build:android`, which performs this step automatically. Model binaries are downloaded from the official versioned URL and verified rather than committed with project source. Other npm/Gradle dependencies retain their own licenses.
+
+Local 3D face protection uses UltraFace RFB-320, from the official ONNX Model Zoo (MIT): https://github.com/onnx/models/tree/main/validated/vision/body_analysis/ultraface . Upstream implementation: https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB . Model SHA256: `34cd7e60aeff28744c657de7a3dc64e872d506741de66987f3426f2b79f88017`. Downloaded model binaries and original-photo detection caches stay in ignored `.local/`. This auxiliary model locates faces only and is distinct from the editor's Meta generation/segmentation models.

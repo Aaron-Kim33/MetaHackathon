@@ -1,13 +1,18 @@
+import {detectFaceRegions} from './face-regions.mjs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { AppError, insist } from './errors.mjs';
 import { compose, normalisePhoto, settings, cutoutFromRaster } from './composition.mjs';
 import { Store, ModelJobs, validId, atomicJson } from './store.mjs';
-import { segment, generateDecoration } from './meta.mjs';
+import { segment, generateDecoration, repairImage, repairPrompt } from './meta.mjs';
+import { AssetLibrary, ReusableModels, imageHash, retainWhiteBackgroundDetails } from './reusable-assets.mjs';
+import { repairRoutes } from './repair-routes.mjs';
+import { stickerGeneration } from './sticker-generation.mjs';
+import { addTestOutput } from './experiment-log.mjs';
 import { COMPOSITION_VERSION } from '../src/composition-scene.ts';
 import { subjectShadow } from './subject-shadow.mjs';
 import { fixture } from './fixture.mjs';
@@ -40,11 +45,15 @@ const stickerLabel = project => {
 };
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher, depthEstimator } = {}) {
+export async function createApp({ root = path.join(home, '.local'), token, key = process.env.MODEL_API_KEY, creditsConfirmed = process.env.HACKATHON_CREDITS_CONFIRMED === 'true', caps = { sam: Number(process.env.SAM_REQUEST_CAP || 0), image: Number(process.env.IMAGE_REQUEST_CAP || 0) }, fetcher, depthEstimator, faceDetector } = {}) {
   const pairing = token || process.env.POPOUT_TOKEN || await localToken(root);
   insist(Object.values(caps).every(n => Number.isSafeInteger(n) && n >= 0), '호출 한도는 0 이상의 정수여야 해요.');
-  const store = new Store(root), jobs = new ModelJobs(path.join(root, 'model-jobs.json'), caps);
+  const store = new Store(root), jobs = new ModelJobs(path.join(root, 'model-jobs.json'), caps,{limitsDisabled:process.env.MODEL_REQUEST_LIMITS==='off'});
   await jobs.init();
+  const library=new AssetLibrary(root),models=new ReusableModels(root,jobs,!!fetcher);
+  const localFaces=faceDetector||(fetcher||depthEstimator?async()=>[]:async bytes=>{try{return await detectFaceRegions(bytes,root);}catch(error){console.warn('Local face protection unavailable:',error.code||error.name);return [];}});
+  const modelReady=()=>{insist(key?.trim(),'Meta Model API 키가 아직 없어요. PC에서 npm run setup:model을 실행해 주세요.',503);insist(creditsConfirmed,'Billing의 대회 크레딧 지급을 확인한 뒤 PC에서 모델 설정을 완료해 주세요.',403);};
+  const cachedSegment=async(image,point,prompt,retryFailed=false)=>{const m=await sharp(image).metadata();return models.run('sam',{model:'sam-3.1',image:imageHash(image),point:point||null,prompt:prompt||'person',settings:{mask_encoding:'one_bit'}},()=>{modelReady();return segment({key,image,width:m.width,height:m.height,point,prompt},fetcher);},{retryFailed});};
   let projectTail = Promise.resolve();
   function mutate(fn) { const next = projectTail.then(fn); projectTail = next.catch(() => {}); return next; }
   async function view(id, previewOnly = false) {
@@ -63,7 +72,10 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
     const preview = { sceneVersion: COMPOSITION_VERSION, image: encoded(result.bytes), baseImage: encoded(result.baseBytes), primaryImage: encoded(result.primaryBytes), width: result.width, height: result.height, options: result.options, baseOptions: result.options, imageOptions: result.options };
     if (previewOnly) return preview;
     const decorationMeta = decoration ? await sharp(decoration).metadata() : null;
-    return { ...preview, backgroundPhoto: backgroundPhoto ? { data: encoded(backgroundPhoto.bytes), width: backgroundPhoto.width, height: backgroundPhoto.height } : null, subjectShadow: shadow ? encoded(shadow) : null, subjectHitMask: cutout ? await makeHitMask(cutout) : null, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: await Promise.all(stickers.map(async ({ id, bytes, width, height, label }) => ({ id, data: encoded(bytes), width, height, label, hitMask: await makeHitMask(bytes) }))), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
+    if(decoration)await library.put({source:await store.read(id,'decoration-source.png'),cutout:decoration,label:'AI decoration',kind:'decoration',parentId:p.decorationProvenance?.image?.assetId||null,provenance:p.decorationProvenance||{}});
+    preview.primaryAssetId=cutout?(await library.put({source:photoSource,cutout,label:'Cutout',provenance:{projectId:id,candidateId:p.selectedId}})).id:null;
+    for(const item of stickers)item.assetId=(await library.put({source:await store.read(id,item.sourceFile),cutout:item.bytes,label:item.label,provenance:{projectId:id,stickerId:item.id}})).id;
+    return { ...preview, backgroundPhoto: backgroundPhoto ? { data: encoded(backgroundPhoto.bytes), width: backgroundPhoto.width, height: backgroundPhoto.height } : null, subjectShadow: shadow ? encoded(shadow) : null, subjectHitMask: cutout ? await makeHitMask(cutout) : null, subjectBounds: cutout ? await alphaBounds(cutout) : null, project: p, stickers: await Promise.all(stickers.map(async ({ id, bytes, width, height, label, assetId }) => ({ id, data: encoded(bytes), width, height, label, assetId, bounds: await alphaBounds(bytes), hitMask: await makeHitMask(bytes) }))), pendingPhoto, image: encoded(result.bytes), width: result.width, height: result.height, source: encoded(source), photoSource: photoSource === source ? null : encoded(photoSource), subject: cutout ? encoded(cutout) : null, decorationImage: decoration ? { data: encoded(decoration), width: decorationMeta.width, height: decorationMeta.height } : null, options: result.options, usage: jobs.usage() };
   }
   const server = http.createServer(async (req, res) => {
     const send = (status, value) => { if (res.destroyed) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(JSON.stringify(value)); };
@@ -74,6 +86,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       const expected = Buffer.from(pairing);
       insist(supplied.length === expected.length && timingSafeEqual(supplied, expected), 'PC 연결 설정을 확인해 주세요.', 401);
       if (req.method === 'GET' && url.pathname === '/status') { send(200, { modelConfigured: !!key?.trim(), creditsConfirmed, usage: jobs.usage() }); return; }
+      if(req.method==='GET'&&url.pathname==='/assets'){send(200,{assets:await library.list()});return;}
       if (req.method === 'GET' && url.pathname === '/editor-state') {
         let saved;
         try { saved = JSON.parse(await readFile(path.join(root, 'editor-state.json'), 'utf8')); }
@@ -82,11 +95,20 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       }
       if (req.method === 'GET' && url.pathname.startsWith('/jobs/')) {
         const id = url.pathname.split('/').at(-1); insist(validId(id), '작업 ID가 올바르지 않아요.');
-        const job = jobs.jobs[id]; insist(job, '작업 기록을 찾지 못했어요.', 404); send(200, job); return;
+        const job = jobs.jobs[id]; insist(job, '작업 기록을 찾지 못했어요.', 404);
+        const appLimitBlocked=job.status==='uncertain'&&['설정한 모델 호출 한도에 도달했어요. 기존 편집과 저장은 계속할 수 있어요.','앱에서 정한 AI 호출 한도에 도달했어요. Meta 크레딧 잔액과는 별개예요. 저장된 소재는 계속 사용할 수 있어요.'].includes(job.message);
+        send(200, {...job,appLimitBlocked}); return;
       }
       if (req.method === 'GET' && url.pathname.startsWith('/projects/')) { send(200, await view(url.pathname.split('/').at(-1))); return; }
       insist(req.method === 'POST', '지원하지 않는 요청이에요.', 404);
       const data = await body(req);
+      if(['/diagnostics/spatial','/diagnostics/cutout'].includes(url.pathname)){
+        const event=String(data.event||'').slice(0,60),details=Object.fromEntries(Object.entries(data.details||{}).filter(([k,v])=>['frameKey','layers','width','height','error','glError','maxTextureSize','contextId','stage','supported','locked','pending','provider'].includes(k)&&['string','number','boolean'].includes(typeof v)).map(([k,v])=>[k,typeof v==='string'?v.slice(0,1500):v]));
+        const kind=url.pathname.endsWith('/cutout')?'cutout':'spatial';
+        await appendFile(path.join(root,`${kind}-client-diagnostics.jsonl`),JSON.stringify({time:new Date().toISOString(),event,details})+'\n');send(200,{ok:true});return;
+      }
+      if(await stickerGeneration(url.pathname,data,{store,jobs,models,library,modelReady,key,fetcher,cachedSegment},send))return;
+      if(await repairRoutes(url.pathname,data,{root,library,models,jobs,store,mutate,view,modelReady,key,fetcher,cachedSegment},send))return;
       if (url.pathname === '/editor-state') {
         await store.get(data.projectId);
         insist(data.pendingJob == null || validId(data.pendingJob), '작업 ID가 올바르지 않아요.');
@@ -113,7 +135,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
         const backdrop = photo ? await spatialBackdrop(Buffer.from(photo.data, 'base64'), photo, current, current.options) : null;
         const result = await spatialFrame(Buffer.from(current.image, 'base64'), root, depthEstimator, backdrop);
         const sources = data.renderer === 'layered' ? Object.fromEntries(await Promise.all((current.project.stickers || []).map(async item => [item.id, (await store.read(project.id, item.sourceFile)).toString('base64')]))) : {};
-        const layers = data.renderer === 'layered' ? await spatialLayers(current, root, sources, depthEstimator) : undefined;
+        const layers = data.renderer === 'layered' ? await spatialLayers(current, root, sources, depthEstimator,localFaces) : undefined;
         send(200, { ...result, layers, projectId: project.id, options: current.options }); return;
       }
       if (url.pathname === '/source/replace') {
@@ -314,25 +336,23 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
       const importedAsset = data.assetId ? (project.imports || []).find(item => item.id === data.assetId) : null;
       insist(!data.assetId || (url.pathname === '/segment' && importedAsset), '가져온 사진을 찾지 못했어요.');
       if (importedAsset) insist((project.stickers || []).length < 16, '스티커는 최대 16개까지 가능해요.');
-      insist(key?.trim(), 'Meta Model API 키가 아직 없어요. PC에서 npm run setup:model을 실행해 주세요.', 503);
-      insist(creditsConfirmed, 'Billing의 대회 크레딧 지급을 확인한 뒤 PC에서 모델 설정을 완료해 주세요.', 403);
       // Validate before reserving any potential paid call.
       if (url.pathname === '/decoration' || (!data.point && url.pathname === '/segment')) insist(typeof data.prompt === 'string' && data.prompt.trim() && data.prompt.length <= 500, '대상을 500자 이내로 설명해 주세요.');
       if (data.point) insist(Number.isFinite(data.point.x) && Number.isFinite(data.point.y) && data.point.x >= 0 && data.point.x <= 1 && data.point.y >= 0 && data.point.y <= 1, '사진 안에서 대상을 선택해 주세요.');
-      const kind = url.pathname === '/decoration' ? 'image' : 'sam';
-      await jobs.run(data.jobId, kind, hash({ path: url.pathname, projectId: project.id, assetId: data.assetId, prompt: data.prompt, point: data.point }), async () => {
+      await jobs.workflow(data.jobId, hash({ path: url.pathname, projectId: project.id, assetId: data.assetId, prompt: data.prompt, point: data.point }), async () => {
         if (url.pathname === '/decoration') {
-          const result = await generateDecoration({ key, prompt: data.prompt }, fetcher);
+          const result = await models.run('image',{model:'muse-image-1.0',prompt:data.prompt,version:1},()=>{modelReady();return generateDecoration({ key, prompt: data.prompt }, fetcher);});
           const generated = await normalisePhoto(result.bytes);
+          const generatedAsset=await library.put({source:generated.bytes,cutout:generated.bytes,label:'Generated image',kind:'generated',provenance:{model:result.model,requestId:result.requestId,prompt:data.prompt}});
           await store.write(project.id, 'decoration-source.png', generated.bytes);
-          await mutate(async () => { const latest = await store.get(project.id); latest.decorationPending = { prompt: data.prompt, model: result.model, requestId: result.requestId, width: generated.width, height: generated.height }; latest.decoration = false; await store.save(latest); });
+          await mutate(async () => { const latest = await store.get(project.id); latest.decorationPending = { prompt: data.prompt, model: result.model, requestId: result.requestId, assetId:generatedAsset.id,width: generated.width, height: generated.height }; latest.decoration = false; await store.save(latest); });
           return { projectId: project.id, requestId: result.requestId };
         }
         const isDecoration = url.pathname === '/decoration/segment';
         insist(!isDecoration || project.decorationPending, '장식을 먼저 생성해 주세요.');
         const image = await store.read(project.id, isDecoration ? 'decoration-source.png' : importedAsset ? importedAsset.file : project.sourceFile || 'source.png');
         const m = await sharp(image).metadata();
-        const result = await segment({ key, image, width: m.width, height: m.height, point: isDecoration ? null : data.point, prompt: isDecoration ? project.decorationPending.prompt : data.prompt }, fetcher);
+        const result = await cachedSegment(image,isDecoration ? null : data.point,isDecoration ? project.decorationPending.prompt : data.prompt);
         insist(result.masks.length > 0, '대상을 찾지 못했어요. 사진에서 대상을 탭하거나 더 짧게 설명해 주세요.', 422);
         insist(result.masks.length <= 16, '대상이 너무 많아요. 사진에서 하나를 탭해 주세요.', 422);
         const selectedMasks = isDecoration ? [result.masks.reduce((a, b) => a.raster.reduce((n, v) => n + v, 0) > b.raster.reduce((n, v) => n + v, 0) ? a : b)] : result.masks;
@@ -341,6 +361,7 @@ export async function createApp({ root = path.join(home, '.local'), token, key =
           const bytes = await cutoutFromRaster(image, mask.raster, mask.box, mask.width, mask.height);
           const id = randomUUID();
           await store.write(project.id, isDecoration ? 'decoration.png' : `subject-${id}.png`, bytes);
+          if(result.experimentId)await addTestOutput(result.experimentId,bytes,`Cutout ${mask.objectId}`,result.logRoot);
           candidates.push({ id, label: `대상 ${mask.objectId}`, box: mask.box, provider: result.model, requestId: result.requestId });
         }
         await mutate(async () => {

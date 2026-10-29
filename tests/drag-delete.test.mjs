@@ -2,8 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import { DragDelete, insideTrash } from '../src/drag-delete.ts';
+import { canvasTouchFromEvent } from '../src/canvas-touch.ts';
 import { compose } from '../server/composition.mjs';
 const bounds = { pageX: 120, pageY: 570, width: 72, height: 72 }, center = { x: 156, y: 606 };
+test('Android release uses the lifted finger rather than the empty event origin',()=>{
+  const release=canvasTouchFromEvent({pageX:0,pageY:0,touches:[],changedTouches:[{identifier:0,pageX:center.x,pageY:center.y}]});
+  const drag=new DragDelete('one',{x:100,y:250});drag.move(center,1,bounds);
+  assert.equal(drag.release(release,bounds),'one');
+});
 
 test('trash hit testing uses the measured page circle and ignores its label and stale/missing layout', () => {
   assert.equal(insideTrash(center, bounds), true);

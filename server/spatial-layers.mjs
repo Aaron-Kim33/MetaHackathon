@@ -6,6 +6,7 @@ import { buildCompositionScene, compositionSvg } from '../src/composition-scene.
 import { spatialFrame } from './depth.mjs';
 import { atomicJson } from './store.mjs';
 import { backgroundPhotoRect } from '../src/layout.ts';
+import {faceMaskImage} from './face-regions.mjs';
 
 const uri = data => `data:image/png;base64,${typeof data === 'string' ? data : data.toString('base64')}`;
 export function padTransparentColours(rgba, width, height) {
@@ -32,24 +33,39 @@ export function extendInvisibleDepth(rgba, width, height) {
   }
   return [...depth];
 }
-export async function spatialLayers(view, root, stickerSources = {}, estimator) {
-  const identity = createHash('sha256').update('separate-surfaces-v3').update(JSON.stringify(view.options));
+async function focusedLayers(layers){
+  for(const layer of layers){
+    if(layer.id==='backdrop'||layer.id==='phone'||layer.focus)continue;
+    const rgba=await sharp(Buffer.from(layer.image,'base64')).resize(layer.gridWidth,layer.gridHeight,{fit:'fill'}).ensureAlpha().raw().toBuffer();
+    let weight=0,u=0,v=0,z=0;
+    for(let y=0;y<layer.gridHeight;y++)for(let x=0;x<layer.gridWidth;x++){
+      const i=y*layer.gridWidth+x,a=rgba[i*4+3];if(a<=8)continue;weight+=a;u+=(x+.5)/layer.gridWidth*a;v+=(y+.5)/layer.gridHeight*a;z+=(layer.baseZ+(layer.depth[i]/255-.5)*layer.relief)*a;
+    }
+    if(weight)layer.focus={u:u/weight,v:v/weight,z:z/weight,weight:weight/(255*layer.gridWidth*layer.gridHeight)};
+  }return layers;
+}
+export async function spatialLayers(view, root, stickerSources = {}, estimator, faceDetector) {
+  const identity = createHash('sha256').update('separate-surfaces-v9-contained-face').update(JSON.stringify(view.options));
   for (const pixels of [view.image, view.source, view.subject, view.photoSource, view.backgroundPhoto?.data, view.decorationImage?.data, ...(view.stickers || []).flatMap(s => [s.id, s.data, stickerSources[s.id]])]) identity.update(pixels || '').update('\0');
   const key = identity.digest('hex');
   const folder = path.join(root, 'spatial-layers-cache'), file = path.join(folder, key + '.json');
-  try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { return focusedLayers(JSON.parse(await readFile(file, 'utf8'))); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const scene = buildCompositionScene({ source: view.project, backdrop: view.backgroundPhoto, subject: !!view.subject, shadow: !!view.subjectShadow, decoration: view.decorationImage, stickers: view.stickers || [] }, view.options);
   const assets = { source: uri(view.photoSource || view.source), ...(view.subject ? { subject: uri(view.subject) } : {}), ...(view.subjectShadow ? { shadow: uri(view.subjectShadow) } : {}), ...(view.backgroundPhoto ? { background: uri(view.backgroundPhoto.data) } : {}), ...(view.decorationImage ? { decoration: uri(view.decorationImage.data) } : {}) };
   for (const sticker of view.stickers || []) assets[`sticker:${sticker.id}`] = uri(sticker.data);
   const width = Math.min(1024, scene.width), height = Math.round(width * scene.height / scene.width);
   const gridWidth = 96, gridHeight = Math.min(160, Math.max(64, Math.round(gridWidth * height / width)));
   const raster = async (nodes, textures) => sharp(Buffer.from(compositionSvg({ ...scene, background: nodes, layers: [], primary: [] }, textures))).resize(width, height).png().toBuffer();
-  const depthAssets = {};
+  const depthAssets = {},faceAssets={};let hasFaces=false;
   async function mapAsset(name, source, alphaImage) {
     const input = Buffer.from(source, 'base64'), estimate = await spatialFrame(input, root, estimator), meta = await sharp(input).metadata();
     let image = sharp(Buffer.from(estimate.depth), { raw: { width: estimate.gridWidth, height: estimate.gridHeight, channels: 1 } }).resize(meta.width, meta.height).toColourspace('srgb').removeAlpha();
     if (alphaImage) { const alpha = await sharp(Buffer.from(alphaImage, 'base64')).ensureAlpha().extractChannel(3).raw().toBuffer(); image = image.joinChannel(alpha, { raw: { width: meta.width, height: meta.height, channels: 1 } }); }
     depthAssets[name] = uri(await image.png().toBuffer());
+    const faces=name!=='background'&&faceDetector?await faceDetector(input):[];hasFaces ||= faces.length>0;
+    let mask=sharp(await faceMaskImage(input,faces)).removeAlpha();
+    if(alphaImage){const alpha=await sharp(Buffer.from(alphaImage,'base64')).ensureAlpha().extractChannel(3).raw().toBuffer();mask=mask.joinChannel(alpha,{raw:{width:meta.width,height:meta.height,channels:1}});}
+    faceAssets[name]=uri(await mask.png().toBuffer());
   }
   if (view.backgroundPhoto) await mapAsset('background', view.backgroundPhoto.data);
   if (!view.options.hidePrimary && (view.subject || view.options.mode === 'plain')) {
@@ -61,6 +77,10 @@ export async function spatialLayers(view, root, stickerSources = {}, estimator) 
     depthAssets.decoration = uri(await sharp({ create: { width: view.decorationImage.width, height: view.decorationImage.height, channels: 3, background: '#808080' } }).joinChannel(alpha, { raw: { width: view.decorationImage.width, height: view.decorationImage.height, channels: 1 } }).png().toBuffer());
   }
   for (const sticker of view.stickers || []) await mapAsset(`sticker:${sticker.id}`, stickerSources[sticker.id] || sticker.data, sticker.data);
+  if(hasFaces)for(const name of Object.keys(assets))if(!faceAssets[name]){
+    const meta=await sharp(Buffer.from(assets[name].split(',')[1],'base64')).metadata();
+    faceAssets[name]=uri(await sharp({create:{width:meta.width,height:meta.height,channels:3,background:'#000000'}}).png().toBuffer());
+  }
   const phone = scene.background.find(n => n.key === 'background-plane');
   const primary = scene.layers.find(n => n.key === 'primary-plane');
   const shadows = primary?.children?.filter(n => n.key === 'subject-shadow') || [];
@@ -97,8 +117,10 @@ export async function spatialLayers(view, root, stickerSources = {}, estimator) 
     const raw = await sharp(surfaceImage).ensureAlpha().raw().toBuffer();
     const padded = padTransparentColours(raw, meta.width, meta.height);
     const texture = await sharp(padded, { raw: { width: meta.width, height: meta.height, channels: 4 } }).resize(textureWidth, textureHeight, { fit: 'fill' }).png().toBuffer();
-    layers.push({ id: group.id, width, height, gridWidth, gridHeight, depth, baseZ: group.z, relief: group.relief, bounds, image: image.toString('base64'), surfaceImage: bounds ? surfaceImage.toString('base64') : undefined, textureImage: texture.toString('base64') });
+    const faceMask=hasFaces&&group.relief&&group.id!=='backdrop'?[...await sharp(await raster(group.nodes,faceAssets)).resize(gridWidth,gridHeight).flatten({background:'#000000'}).extractChannel(0).raw().toBuffer()]:undefined;
+    layers.push({ id: group.id, width, height, gridWidth, gridHeight, depth, faceMask:faceMask?.some(v=>v>=128)?faceMask:undefined, baseZ: group.z, relief: group.relief, bounds, image: image.toString('base64'), surfaceImage: bounds ? surfaceImage.toString('base64') : undefined, textureImage: texture.toString('base64') });
   }
-  await atomicJson(file, layers);
-  return layers;
+  const focused=await focusedLayers(layers);
+  await atomicJson(file, focused);
+  return focused;
 }

@@ -1,16 +1,16 @@
 import sharp from 'sharp';
 import { insist } from './errors.mjs';
 export async function makeHitMask(bytes) {
-  const width = 64, height = 64;
+  const width = 128, height = 128;
   const alpha = await sharp(bytes).ensureAlpha().extractChannel('alpha').resize(width, height, { fit: 'fill' }).raw().toBuffer();
   const bits = Buffer.alloc(width * height / 8);
   for (let i = 0; i < alpha.length; i++) if (alpha[i] > 8) bits[Math.floor(i / 8)] |= 1 << (i % 8);
   return { width, height, bits: bits.toString('hex') };
 }
 export async function alphaBounds(cutout) {
-  const { data, info } = await sharp(cutout).extractChannel('alpha').raw().toBuffer({ resolveWithObject: true });
+  const { data, info } = await sharp(cutout).ensureAlpha().extractChannel('alpha').raw().toBuffer({ resolveWithObject: true });
   let left = info.width, top = info.height, right = -1, bottom = -1;
-  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[y * info.width + x] > 0) {
+  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[y * info.width + x] > 8) {
     left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
   }
   return right < left ? { x: 0, y: 0, width: 0, height: 0 } : { x: left / info.width, y: top / info.height, width: (right - left + 1) / info.width, height: (bottom - top + 1) / info.height };
@@ -19,12 +19,12 @@ export async function alphaBounds(cutout) {
 export async function trimSticker(source, cutout) {
   const { data, info } = await sharp(cutout).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   let left = info.width, top = info.height, right = -1, bottom = -1;
-  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[(y * info.width + x) * 4 + 3] > 0) {
+  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) if (data[(y * info.width + x) * 4 + 3] > 8) {
     left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
   }
   insist(right >= left && bottom >= top, '남길 피사체가 비어 있어요.');
   const rect = { left, top, width: right - left + 1, height: bottom - top + 1 };
-  return { bytes: await sharp(cutout).extract(rect).png().toBuffer(), source: await sharp(source).extract(rect).png().toBuffer(), width: rect.width, height: rect.height };
+  return { bytes: await sharp(cutout).ensureAlpha().extract(rect).png().toBuffer(), source: await sharp(source).extract(rect).png().toBuffer(), width: rect.width, height: rect.height };
 }
 
 export async function contourCutout(source, points) {

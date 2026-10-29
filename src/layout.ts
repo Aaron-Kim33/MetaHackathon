@@ -1,4 +1,4 @@
-import { rotatePoint, rotatedRect, wrapAngle } from './rotation.ts';
+import { rotatePoint, wrapAngle } from './rotation.ts';
 import { frameMatrix, unprojectFrame } from './frame.ts';
 export type PhotoLayoutOptions = { mode?: 'plain' | 'frame' | 'sticker'; frameScale?: number; frameX?: number; frameY?: number; tilt?: number; depth?: number; photoRotation?: number; ratio: 'portrait' | 'story' | 'square'; zoom: number; x: number; y: number };
 export type Dimensions = { width: number; height: number };
@@ -14,7 +14,7 @@ const visibleShift = (start: number, length: number, total: number, minimum: num
   return start + length < keep ? keep - start - length : start > total - keep ? total - keep - start : 0;
 };
 export function keepStickerVisible(source: Dimensions, transform: StickerTransform, canvas: Dimensions, minimum = 140): StickerTransform {
-  const r = rotatedRect(stickerRect(source, transform, canvas), transform.rotation || 0);
+  const r = visibleStickerRect(source, transform, canvas);
   return { ...transform, x: Math.max(-0.3, Math.min(1.3, transform.x + visibleShift(r.x, r.width, canvas.width, minimum) / canvas.width)), y: Math.max(-0.3, Math.min(1.3, transform.y + visibleShift(r.y, r.height, canvas.height, minimum) / canvas.height)) };
 }
 export function projectedPhotoRect(source: Dimensions, options: PhotoLayoutOptions, bounds: NormalizedBounds = { x: 0, y: 0, width: 1, height: 1 }) {
@@ -37,6 +37,14 @@ export function stickerRect(source: Dimensions, transform: StickerTransform, can
   const width = Math.max(1, Math.round(source.width * factor)), height = Math.max(1, Math.round(source.height * factor));
   return { x: Math.round(transform.x * canvas.width - width / 2), y: Math.round(transform.y * canvas.height - height / 2), width, height };
 }
+export function visibleStickerRect(source:Dimensions & {bounds?:NormalizedBounds},transform:StickerTransform,canvas:Dimensions){
+  const rect=stickerRect(source,transform,canvas),b=source.bounds||{x:0,y:0,width:1,height:1};
+  const x=rect.x+b.x*rect.width,y=rect.y+b.y*rect.height,w=b.width*rect.width,h=b.height*rect.height;
+  const center={x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+  const points=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]].map(([x,y])=>rotatePoint({x,y},center,transform.rotation||0));
+  const left=Math.min(...points.map(p=>p.x)),top=Math.min(...points.map(p=>p.y));
+  return {x:left,y:top,width:Math.max(...points.map(p=>p.x))-left,height:Math.max(...points.map(p=>p.y))-top};
+}
 export function gestureSticker(initial: StickerTransform, source: Dimensions, canvas: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number; rotation?: number }): StickerTransform {
   if (!(displayWidth > 0) || ![gesture.dx, gesture.dy, gesture.factor, gesture.anchorX, (gesture.rotation ?? 0), gesture.anchorY].every(Number.isFinite) || gesture.factor <= 0) return initial;
   const units = canvas.width / displayWidth, before = stickerRect(source, initial, canvas);
@@ -48,14 +56,19 @@ export function gestureSticker(initial: StickerTransform, source: Dimensions, ca
 }
 export function photoLayout(source: Dimensions, options: PhotoLayoutOptions) {
   const width = 1080, height = options.ratio === 'story' ? 1920 : options.ratio === 'square' ? 1080 : 1350;
-  const baseHeight = Math.round(height * 0.59), baseWidth = Math.min(588, Math.round(baseHeight * 0.56));
+  const baseHeight = Math.round(height * (options.ratio === 'story' ? 0.40 : 0.49)), baseWidth = Math.min(588, Math.round(baseHeight * 0.56));
   const screenHeight = Math.round(baseHeight * (options.frameScale || 1)), screenWidth = Math.round(baseWidth * (options.frameScale || 1));
-  const screen = options.mode === 'sticker' || options.mode === 'plain' ? { x: 0, y: 0, width, height } : { x: Math.round((width - screenWidth) / 2 + (options.frameX || 0) * width), y: Math.round(height * 0.29 + baseHeight / 2 - screenHeight / 2 + (options.frameY || 0) * height), width: screenWidth, height: screenHeight };
+  const screen = options.mode === 'sticker' || options.mode === 'plain' ? { x: 0, y: 0, width, height } : { x: Math.round((width - screenWidth) / 2 + (options.frameX || 0) * width), y: Math.round(height * 0.585 - screenHeight / 2 + (options.frameY || 0) * height), width: screenWidth, height: screenHeight };
   const scale = (options.mode === 'sticker' || options.mode === 'plain' ? Math.min(width / source.width, height / source.height) * 0.85 : Math.max(screen.width / source.width, screen.height / source.height)) * options.zoom;
   const photo = { width: Math.round(source.width * scale), height: Math.round(source.height * scale), x: 0, y: 0 };
   photo.x = Math.round(screen.x + (screen.width - photo.width) / 2 + options.x * screen.width);
   photo.y = Math.round(screen.y + (screen.height - photo.height) / 2 + options.y * screen.height);
   return { width, height, screen, photo };
+}
+export function gestureFrame<T extends PhotoLayoutOptions>(initial: T, displayWidth: number, gesture: { dx: number; dy: number; factor: number; rotation: number }): T {
+  const g=photoLayout({width:1,height:1},initial), unit=g.width/displayWidth;
+  if (!(displayWidth>0) || !Object.values(gesture).every(Number.isFinite) || gesture.factor<=0) return initial;
+  return {...initial,frameScale:Math.max(.7,Math.min(1.5,(initial.frameScale ?? 1)*gesture.factor)),tilt:Math.max(-18,Math.min(18,(initial.tilt || 0)+gesture.rotation)),frameX:Math.max(-.35,Math.min(.35,(initial.frameX || 0)+gesture.dx*unit/g.width)),frameY:Math.max(-.25,Math.min(.25,(initial.frameY || 0)+gesture.dy*unit/g.height))};
 }
 const bound = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 export function gesturePhoto<T extends PhotoLayoutOptions>(initial: T, source: Dimensions, displayWidth: number, gesture: { dx: number; dy: number; factor: number; anchorX: number; anchorY: number; rotation?: number }, bounds?: NormalizedBounds): T {
